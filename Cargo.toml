@@ -31,11 +31,16 @@ tiny_http = "0.12"
 # NATS swarm integration (Explorer/Optimizer/Classifier/Dreamer agents publish
 # and subscribe here). NOT in default features — mirrors kannaka-memory's
 # `bridge` pattern so CI/default builds never pull a network stack.
-nats = { version = "0.24", optional = true }
+# async-nats (not the deprecated sync `nats` crate): the sync crate drags in
+# ring 0.16 / rustls-webpki 0.100-0.101, all of which carry open RUSTSEC
+# advisories that fail the security audit workflow.
+async-nats = { version = "0.50", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "time"], optional = true }
+futures = { version = "0.3", optional = true }
 
 [features]
 default = []
-swarm = ["dep:nats"]
+swarm = ["dep:async-nats", "dep:tokio", "dep:futures"]
 
 [profile.release]
 lto = true
