@@ -1,0 +1,215 @@
+use clap::{Parser, Subcommand};
+use kannaka_crystal::discovery::{evolve, EvolutionConfig};
+use kannaka_crystal::dream::{dream, DreamMode};
+use kannaka_crystal::engine::CrystalEngine;
+use kannaka_crystal::field::DEFAULT_SIZE;
+use kannaka_crystal::lang::run_program;
+use kannaka_crystal::material::builtin_materials;
+use kannaka_crystal::registry::Registry;
+
+#[derive(Parser)]
+#[command(
+    name = "kannaka-crystal",
+    version,
+    about = "Kannaka Crystal — informational materials & resonant memory systems"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Serve the REST API + Observatory UI
+    Serve {
+        #[arg(long, default_value = "127.0.0.1:3339")]
+        bind: String,
+        #[arg(long, default_value = "ideal_resonator")]
+        material: String,
+        #[arg(long, default_value_t = DEFAULT_SIZE)]
+        size: usize,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
+    /// Execute a .crystal program file
+    Run {
+        /// Path to a .crystal file
+        file: String,
+        #[arg(long, default_value = "ideal_resonator")]
+        material: String,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
+    /// Evolutionary search for novel primitives
+    Evolve {
+        #[arg(long, default_value = "ideal_resonator")]
+        material: String,
+        #[arg(long, default_value_t = 10)]
+        generations: usize,
+        #[arg(long, default_value_t = 12)]
+        population: usize,
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
+    /// Run a standalone dream (consolidation) experiment
+    Dream {
+        #[arg(long, default_value = "ideal_resonator")]
+        material: String,
+        #[arg(long, default_value = "deep")]
+        mode: String,
+        /// Text memories to write before dreaming
+        #[arg(long)]
+        write: Vec<String>,
+    },
+    /// List built-in materials
+    Materials,
+    /// Inspect the primitive registry
+    Primitives {
+        /// Show a single primitive by id (CRY-###### or UUID)
+        id: Option<String>,
+        /// Export the full registry as JSON to stdout
+        #[arg(long)]
+        export: bool,
+    },
+    /// Run a NATS Explorer agent (requires --features swarm build)
+    #[cfg(feature = "swarm")]
+    Explore {
+        #[arg(long, default_value = "ideal_resonator")]
+        material: String,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(e) = dispatch(cli.command) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn dispatch(command: Command) -> Result<(), String> {
+    match command {
+        Command::Serve {
+            bind,
+            material,
+            size,
+            seed,
+        } => kannaka_crystal::api::serve(&bind, &material, size, seed),
+        Command::Run {
+            file,
+            material,
+            seed,
+        } => {
+            let source = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+            let mut engine = CrystalEngine::new(&material, DEFAULT_SIZE, seed)?;
+            let mut registry = Registry::load().map_err(|e| e.to_string())?;
+            let report =
+                run_program(&source, &mut engine, &mut registry).map_err(|e| e.to_string())?;
+            registry.save().map_err(|e| e.to_string())?;
+            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            Ok(())
+        }
+        Command::Evolve {
+            material,
+            generations,
+            population,
+            seed,
+        } => {
+            let cfg = EvolutionConfig {
+                material_id: material,
+                generations,
+                population,
+                seed,
+                ..Default::default()
+            };
+            kannaka_crystal::material::find_material(&cfg.material_id)
+                .ok_or_else(|| format!("unknown material: {}", cfg.material_id))?;
+            let mut registry = Registry::load().map_err(|e| e.to_string())?;
+            let report = evolve(&cfg, &mut registry, |line| println!("{line}"));
+            registry.save().map_err(|e| e.to_string())?;
+            println!(
+                "\nevolution complete: {} evaluations, best fitness {:.3}, {} new primitives ({} total)",
+                report.evaluated,
+                report.best_fitness,
+                report.discovered.len(),
+                registry.primitives.len()
+            );
+            Ok(())
+        }
+        Command::Dream {
+            material,
+            mode,
+            write,
+        } => {
+            let mode = match mode.as_str() {
+                "light" => DreamMode::Light,
+                "deep" => DreamMode::Deep,
+                other => return Err(format!("unknown dream mode: {other}")),
+            };
+            let mut engine = CrystalEngine::new(&material, DEFAULT_SIZE, 0)?;
+            for text in &write {
+                engine.write(text, 1.0);
+            }
+            engine.resonate(200);
+            let report = dream(&mut engine, mode);
+            println!(
+                "dreamed ({:?}): pruned {:.1}%, energy {:.3e} -> {:.3e}",
+                report.mode,
+                report.pruned_fraction * 100.0,
+                report.energy_before,
+                report.energy_after
+            );
+            for text in &write {
+                let p = engine.probe(text);
+                println!("  after dream, \"{}\" resonance = {:.3}", text, p.resonance);
+            }
+            Ok(())
+        }
+        Command::Materials => {
+            for m in builtin_materials() {
+                println!(
+                    "{:<18} c={:<5} damping={:<7} reflect={:<5} T={:>6}K  {}",
+                    m.id,
+                    m.wave_speed,
+                    m.damping,
+                    m.boundary_reflect,
+                    m.default_temperature_k,
+                    m.name
+                );
+            }
+            Ok(())
+        }
+        Command::Primitives { id, export } => {
+            let registry = Registry::load().map_err(|e| e.to_string())?;
+            if export {
+                println!("{}", serde_json::to_string_pretty(&registry).unwrap());
+                return Ok(());
+            }
+            if let Some(id) = id {
+                let p = registry
+                    .find(&id)
+                    .ok_or_else(|| format!("unknown primitive: {id}"))?;
+                println!("{}", serde_json::to_string_pretty(p).unwrap());
+                return Ok(());
+            }
+            if registry.primitives.is_empty() {
+                println!("registry is empty — try: kannaka-crystal evolve");
+                return Ok(());
+            }
+            for p in &registry.primitives {
+                println!(
+                    "{}  {:<16} persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]",
+                    p.id,
+                    p.class.to_string(),
+                    p.persistence * 100.0,
+                    p.noise_tolerance * 100.0,
+                    p.material_id,
+                    p.lineage.join(", ")
+                );
+            }
+            Ok(())
+        }
+        #[cfg(feature = "swarm")]
+        Command::Explore { material } => kannaka_crystal::swarm::run_explorer(&material),
+    }
+}

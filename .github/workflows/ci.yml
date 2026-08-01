@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check, Test, Clippy, Fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check (default features)
+        run: cargo check --all-targets
+
+      - name: Test
+        # Runs unit tests AND tests/end_to_end.rs — the end-to-end suite is
+        # the PRD conformance gate (write→resonate→dream→recall, materials
+        # must differ measurably, discovery must register primitives) and
+        # has no external dependencies, so it always gates.
+        run: cargo test
+
+      - name: Swarm feature (NATS explorer + announcements)
+        # `swarm` is NOT in default features, so the steps above compile
+        # neither src/swarm.rs nor the `explore` subcommand. Without this
+        # step the entire NATS surface could rot silently.
+        run: cargo check --features swarm --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Fmt
+        # Enforced from day one — this repo does not predate rustfmt.
+        run: cargo fmt --check

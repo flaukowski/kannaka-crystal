@@ -1,0 +1,42 @@
+[package]
+name = "kannaka-crystal"
+version = "0.1.0"
+edition = "2021"
+description = "Kannaka Crystal — an experimental platform for informational materials and resonant memory systems"
+license = "MIT"
+repository = "https://github.com/flaukowski/kannaka-crystal"
+
+[[bin]]
+name = "kannaka-crystal"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+# Content hashing for primitive identity + deterministic text->wavefront
+# encoding. Unconditional, mirroring kannaka-memory's provenance path.
+blake3 = "1.5"
+rand = "0.8"
+rand_chacha = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+dirs = "5"
+# Pure-Rust embedded HTTP server for the REST API + Observatory. Chosen over
+# axum/tokio to keep the default build lean and dependency-light — the API is
+# a research surface, not a high-concurrency service.
+tiny_http = "0.12"
+
+# NATS swarm integration (Explorer/Optimizer/Classifier/Dreamer agents publish
+# and subscribe here). NOT in default features — mirrors kannaka-memory's
+# `bridge` pattern so CI/default builds never pull a network stack.
+nats = { version = "0.24", optional = true }
+
+[features]
+default = []
+swarm = ["dep:nats"]
+
+[profile.release]
+lto = true
+strip = true

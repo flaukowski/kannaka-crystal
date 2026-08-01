@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crystal Observatory</title>
+<style>
+  :root { --bg:#0a0a14; --panel:#121222; --edge:#2a2a4a; --text:#c8c8e8; --accent:#8f6fff; --glow:#b49aff; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; padding: 1rem; }
+  h1 { font-size: 1.1rem; letter-spacing: .35em; color: var(--glow); font-weight: 400; margin-bottom: 1rem; }
+  h1 b { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: minmax(280px, 520px) 1fr; gap: 1rem; }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: .8rem; }
+  .panel h2 { font-size: .7rem; text-transform: uppercase; letter-spacing: .2em; color: #7f7fb0; margin-bottom: .6rem; }
+  canvas { width: 100%; image-rendering: pixelated; border-radius: 4px; display:block; }
+  #energy { height: 120px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 1rem; font-size: .8rem; margin-bottom: .8rem; }
+  .stats span b { color: var(--glow); font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: .75rem; }
+  th, td { text-align: left; padding: .25rem .4rem; border-bottom: 1px solid var(--edge); }
+  th { color: #7f7fb0; font-weight: 500; }
+  .controls { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .8rem; }
+  button, input { background: #1c1c34; color: var(--text); border: 1px solid var(--edge); border-radius: 5px; padding: .35rem .7rem; font-size: .75rem; }
+  button:hover { border-color: var(--accent); cursor: pointer; }
+  input { width: 12rem; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1><b>KANNAKA</b> CRYSTAL — OBSERVATORY</h1>
+<div class="stats">
+  <span>material <b id="s-mat">–</b></span>
+  <span>step <b id="s-step">0</b></span>
+  <span>energy <b id="s-energy">0</b></span>
+  <span>temperature <b id="s-temp">0</b> K</span>
+  <span>primitives <b id="s-prims">0</b></span>
+</div>
+<div class="grid">
+  <div class="panel">
+    <h2>Resonance Field</h2>
+    <canvas id="field" width="64" height="64"></canvas>
+    <div class="controls">
+      <input id="write-text" placeholder='write a memory…'>
+      <button onclick="doWrite()">WRITE</button>
+      <button onclick="post('/crystal/pulse',{x:Math.random()*0.6+0.2,y:Math.random()*0.6+0.2,radius:0.05,amplitude:1.5,frequency:2,phase:0})">PULSE</button>
+      <button onclick="post('/crystal/step',{steps:200})">RESONATE</button>
+      <button onclick="post('/crystal/dream',{mode:'deep'})">DREAM</button>
+      <button onclick="post('/crystal/evolve',{generations:3,population:6})">EVOLVE</button>
+    </div>
+  </div>
+  <div>
+    <div class="panel" style="margin-bottom:1rem">
+      <h2>Decay Timeline — field energy</h2>
+      <canvas id="energy" width="600" height="120"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Primitive Registry</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Class</th><th>Persistence</th><th>Noise&nbsp;Tol.</th><th>Material</th><th>Lineage</th></tr></thead>
+        <tbody id="prims"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+const fieldCanvas = document.getElementById('field');
+const fctx = fieldCanvas.getContext('2d');
+const energyCanvas = document.getElementById('energy');
+const ectx = energyCanvas.getContext('2d');
+
+async function post(url, body) {
+  await fetch(url, { method: 'POST', body: JSON.stringify(body || {}) });
+  refresh(); loadPrims();
+}
+function doWrite() {
+  const t = document.getElementById('write-text').value.trim();
+  if (t) post('/crystal/write', { text: t, importance: 1.0 });
+}
+
+function drawField(cells, n) {
+  const img = fctx.createImageData(n, n);
+  let max = 1e-9;
+  for (const v of cells) if (v > max) max = v;
+  for (let i = 0; i < cells.length; i++) {
+    const t = Math.pow(cells[i] / max, 0.5);
+    img.data[i*4+0] = 20 + 160 * t;
+    img.data[i*4+1] = 10 + 60 * t;
+    img.data[i*4+2] = 40 + 215 * t;
+    img.data[i*4+3] = 255;
+  }
+  fctx.putImageData(img, 0, 0);
+}
+
+function drawEnergy(timeline) {
+  const w = energyCanvas.width, h = energyCanvas.height;
+  ectx.clearRect(0, 0, w, h);
+  if (!timeline.length) return;
+  const max = Math.max(...timeline.map(p => p[1]), 1e-9);
+  ectx.beginPath();
+  timeline.forEach((p, i) => {
+    const x = i / Math.max(timeline.length - 1, 1) * w;
+    const y = h - (p[1] / max) * (h - 8) - 4;
+    i ? ectx.lineTo(x, y) : ectx.moveTo(x, y);
+  });
+  ectx.strokeStyle = '#8f6fff'; ectx.lineWidth = 1.5; ectx.stroke();
+}
+
+async function refresh() {
+  try {
+    const s = await (await fetch('/crystal/state')).json();
+    document.getElementById('s-mat').textContent = s.material.id;
+    document.getElementById('s-step').textContent = s.step;
+    document.getElementById('s-energy').textContent = s.energy.toExponential(2);
+    document.getElementById('s-temp').textContent = s.temperature_k;
+    document.getElementById('s-prims').textContent = s.primitive_count;
+    drawField(s.field, s.field_size);
+    drawEnergy(s.energy_timeline);
+  } catch (e) { /* server busy (evolving) — keep polling */ }
+}
+
+async function loadPrims() {
+  try {
+    const prims = await (await fetch('/primitives')).json();
+    document.getElementById('prims').innerHTML = prims.slice(-40).reverse().map(p =>
+      `<tr><td>${p.id}</td><td>${p.class}</td>` +
+      `<td>${(p.persistence*100).toFixed(1)}%</td>` +
+      `<td>${(p.noise_tolerance*100).toFixed(1)}%</td>` +
+      `<td>${p.material_id}</td><td>${(p.lineage||[]).join(' ← ') || '—'}</td></tr>`
+    ).join('');
+  } catch (e) { /* ignore */ }
+}
+
+refresh(); loadPrims();
+setInterval(refresh, 1500);
+setInterval(loadPrims, 5000);
+</script>
+</body>
+</html>

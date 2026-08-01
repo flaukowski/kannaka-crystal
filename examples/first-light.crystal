@@ -1,0 +1,18 @@
+# first-light.crystal — the canonical smoke experiment (PRD "Research Mode").
+# Run with: kannaka-crystal run examples/first-light.crystal --material europium_crystal
+
+MATERIAL europium_crystal
+SEED 21
+TEMPERATURE 4          # cryogenic — europium holds structure cold
+NOISE 0.02
+
+WRITE "glyph twenty one" 0.9
+PULSE 0.5 0.5 0.06 1.2 2.0 0.0
+RESONATE 400
+
+PROBE "glyph twenty one"
+
+DREAM deep
+STABILIZE              # register anything that crystallized
+
+RECALL "glyph" 3
