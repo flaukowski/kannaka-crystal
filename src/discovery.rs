@@ -235,7 +235,7 @@ pub fn evolve(
         }
 
         // Selection: keep the top half, refill with mutants of survivors.
-        population.sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap());
+        population.sort_by(|a, b| b.fitness.total_cmp(&a.fitness));
         let keep = (cfg.population / 2).max(1);
         population.truncate(keep);
         while population.len() < cfg.population {

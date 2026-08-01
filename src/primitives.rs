@@ -98,7 +98,7 @@ pub fn detect_structures(stability: &[f64], size: usize) -> Vec<DetectedStructur
         out.push(analyze_region(&cells, stability, size, mean));
     }
     // Most stable first.
-    out.sort_by(|a, b| b.stability_score.partial_cmp(&a.stability_score).unwrap());
+    out.sort_by(|a, b| b.stability_score.total_cmp(&a.stability_score));
     out
 }
 

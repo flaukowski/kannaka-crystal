@@ -89,14 +89,23 @@ impl Field {
                     + self.u_prev[i + n]
                     - 4.0 * self.u_prev[i];
                 let u = self.u[i];
-                let mut v = 2.0 * u - self.u_prev[i] + c2 * lap
-                    - damping * (u - self.u_prev[i])
-                    - nl * u * u * u
-                    + VISCOSITY * (lap - lap_prev);
+                // Bounded saturation: u^3/(1+u^2) ~ u^3 for small amplitudes
+                // but tends to u for large ones. A raw cubic is explicit-
+                // integration unstable above |u| ~ 1/sqrt(nl) — cells ring
+                // against any hard clamp at full amplitude forever.
+                let sat = u * u * u / (1.0 + u * u);
+                let mut v =
+                    2.0 * u - self.u_prev[i] + c2 * lap - damping * (u - self.u_prev[i]) - nl * sat
+                        + VISCOSITY * (lap - lap_prev);
                 if thermal > 0.0 {
                     v += rng.gen_range(-thermal..thermal);
                 }
-                u_next[i] = v;
+                // Physical saturation ceiling. The explicit cubic term is
+                // conditionally stable: for large |u| it overshoots with
+                // alternating sign and diverges to NaN, which then poisons
+                // every correlation and fitness sort downstream. Real media
+                // saturate; so does this one.
+                u_next[i] = v.clamp(-100.0, 100.0);
             }
         }
         // Boundaries: reflected copy of the adjacent interior cell, scaled.
@@ -273,6 +282,25 @@ mod tests {
         }
         f.u = pattern.clone();
         assert!(f.correlate(&pattern) > 0.999);
+    }
+
+    #[test]
+    fn extreme_amplitudes_never_produce_nan() {
+        // Regression: the explicit cubic term diverges to NaN for large |u|
+        // without the saturation clamp (seen live: `evolve --seed 42`
+        // panicked in a fitness sort on NaN persistence).
+        let mat = find_material("metamaterial").unwrap();
+        let mut f = Field::new(64);
+        let mut rng = seeded_rng(42);
+        for i in 0..20 {
+            f.inject_at(22 + i, 32, 40.0);
+            f.inject_at(22 + i, 33, -40.0);
+        }
+        for _ in 0..2000 {
+            f.step(&mat, 293.0, 0.05, &mut rng);
+        }
+        assert!(f.u.iter().all(|v| v.is_finite()), "field went NaN");
+        assert!(f.energy().is_finite());
     }
 
     #[test]

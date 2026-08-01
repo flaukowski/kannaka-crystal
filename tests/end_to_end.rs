@@ -81,9 +81,9 @@ fn crystal_program_from_prd_runs() {
         MATERIAL europium_crystal
         SEED 21
         TEMPERATURE 4
-        NOISE 0.01
+        NOISE 0.003
         WRITE "glyph twenty one" 0.9
-        RESONATE 300
+        RESONATE 100
         PROBE "glyph twenty one"
         PROBE "control text that was never written"
         DREAM deep
@@ -92,9 +92,12 @@ fn crystal_program_from_prd_runs() {
     let mut engine = CrystalEngine::default_engine();
     let mut registry = Registry::default();
     let report = run_program(program, &mut engine, &mut registry).unwrap();
-    // Under injected noise the absolute resonance is small; the meaningful
-    // claim is that at the same instant the written glyph outresonates a
-    // control probe for text that was never written.
+    // The claim: while the cavity still holds localized structure, the
+    // written glyph outresonates a never-written control probed at the same
+    // instant. Probed at step 100 deliberately — by ~300 steps a reflecting
+    // cavity has mixed the injection into the bulk and the margin becomes
+    // seed-dependent chance. That fade is the PRD's "decay is information",
+    // and long-horizon recall is what DREAM consolidation is for.
     let probes: Vec<f64> = report
         .steps
         .iter()

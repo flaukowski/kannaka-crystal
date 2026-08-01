@@ -93,11 +93,19 @@ impl CrystalEngine {
     }
 
     /// PROBE — how strongly does `text` still resonate in the field?
+    ///
+    /// Blends envelope correlation (is the field's energy where this
+    /// pattern put it?) with phase correlation (is it still coherently
+    /// ringing the exact pattern?). Envelope dominates: phases evolve
+    /// long before a structure dies, and a phase-only probe against an
+    /// old field degenerates to chance.
     pub fn probe(&mut self, text: &str) -> ProbeResult {
         let pattern = encode_text(text, self.field.size);
+        let envelope = self.field.correlate_envelope(&pattern);
+        let phase = self.field.correlate(&pattern);
         ProbeResult {
             text: text.to_string(),
-            resonance: self.field.correlate(&pattern),
+            resonance: 0.6 * envelope + 0.4 * phase,
             field_energy: self.field.energy(),
             step: self.field.step_count,
         }
@@ -123,12 +131,13 @@ impl CrystalEngine {
                 // (~0.05), and multiplying chance by overlap still loses to
                 // chance. Overlap must be able to outweigh noise on its own.
                 let overlap = word_overlap(query, &p.text);
-                p.resonance =
-                    p.resonance * (1.0 + overlap) + 0.1 * overlap + query_probe.resonance * 0.05;
+                p.resonance = p.resonance * (1.0 + 2.0 * overlap)
+                    + 0.3 * overlap
+                    + query_probe.resonance * 0.05;
                 p
             })
             .collect();
-        results.sort_by(|a, b| b.resonance.partial_cmp(&a.resonance).unwrap());
+        results.sort_by(|a, b| b.resonance.total_cmp(&a.resonance));
         results.truncate(top_k);
         results
     }
