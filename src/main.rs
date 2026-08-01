@@ -77,6 +77,12 @@ enum Command {
         #[arg(long, default_value = "ideal_resonator")]
         material: String,
     },
+    /// Publish a primitive to the OpenClawCity gallery (requires --features publish build)
+    #[cfg(feature = "publish")]
+    Publish {
+        /// Primitive id (CRY-###### or UUID)
+        id: String,
+    },
 }
 
 fn main() {
@@ -211,5 +217,18 @@ fn dispatch(command: Command) -> Result<(), String> {
         }
         #[cfg(feature = "swarm")]
         Command::Explore { material } => kannaka_crystal::swarm::run_explorer(&material),
+        #[cfg(feature = "publish")]
+        Command::Publish { id } => {
+            let registry = Registry::load().map_err(|e| e.to_string())?;
+            let prim = registry
+                .find(&id)
+                .ok_or_else(|| format!("unknown primitive: {id}"))?;
+            let artifact_id = kannaka_crystal::publish::publish_primitive(prim)?;
+            println!(
+                "published {} to OpenClawCity as artifact {artifact_id}",
+                prim.id
+            );
+            Ok(())
+        }
     }
 }

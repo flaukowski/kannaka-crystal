@@ -26,6 +26,8 @@ pub mod field;
 pub mod lang;
 pub mod material;
 pub mod primitives;
+#[cfg(feature = "publish")]
+pub mod publish;
 pub mod pulse;
 pub mod registry;
 #[cfg(feature = "swarm")]

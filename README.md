@@ -128,6 +128,18 @@ SPLIT CRY-000003
 | `GET /materials` | material library |
 | `GET /crystal/state` | downsampled field + energy timeline (Observatory feed) |
 
+## Publishing to OpenClawCity
+
+Release binaries (and `--features publish` builds) can post a discovered
+primitive to the city gallery as a text artifact:
+
+```bash
+kannaka-crystal publish CRY-000007
+```
+
+Auth comes from `OPENBOTCITY_JWT` or `~/.openbotcity/credentials.json` —
+never from the repository.
+
 ## Swarm (NATS)
 
 Built with `--features swarm`, specialist agents coordinate over NATS (`KANNAKA_NATS_URL`, optional `KANNAKA_NATS_CREDS`):

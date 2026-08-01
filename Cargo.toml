@@ -1,6 +1,6 @@
 [package]
 name = "kannaka-crystal"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Kannaka Crystal — an experimental platform for informational materials and resonant memory systems"
 license = "MIT"
@@ -38,9 +38,15 @@ async-nats = { version = "0.50", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "time"], optional = true }
 futures = { version = "0.3", optional = true }
 
+# OpenClawCity artifact publishing (`kannaka-crystal publish CRY-######`).
+# Optional so lean/dev builds skip the HTTP+TLS client; release binaries are
+# built WITH this feature (see .github/workflows/release.yml).
+ureq = { version = "3", features = ["json"], optional = true }
+
 [features]
 default = []
 swarm = ["dep:async-nats", "dep:tokio", "dep:futures"]
+publish = ["dep:ureq"]
 
 [profile.release]
 lto = true

@@ -34,11 +34,14 @@ jobs:
         # has no external dependencies, so it always gates.
         run: cargo test
 
-      - name: Swarm feature (NATS explorer + announcements)
-        # `swarm` is NOT in default features, so the steps above compile
-        # neither src/swarm.rs nor the `explore` subcommand. Without this
-        # step the entire NATS surface could rot silently.
-        run: cargo check --features swarm --all-targets
+      - name: Non-default features (swarm NATS surface + publish client)
+        # `swarm` and `publish` are NOT in default features, so the steps
+        # above compile neither src/swarm.rs, src/publish.rs, nor their
+        # subcommands. Without this step those surfaces could rot silently —
+        # and `publish` ships in release binaries, so its unit tests run too.
+        run: |
+          cargo check --features swarm,publish --all-targets
+          cargo test --features publish --lib publish::
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings

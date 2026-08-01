@@ -44,7 +44,9 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --bin kannaka-crystal
+        # `publish` (OpenClawCity artifact posting) ships in release binaries;
+        # only local dev builds default to the lean no-HTTP-client profile.
+        run: cargo build --release --target ${{ matrix.target }} --features publish --bin kannaka-crystal
 
       - name: Rename artifact + emit SHA-256 sidecar
         shell: bash
