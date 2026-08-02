@@ -38,6 +38,14 @@ announcements, not a shared database.**
   atomic rename, so a racing write loses an update but never corrupts the
   file. Acceptable at v0.5 write rates; a lock (or single-writer rule)
   is the known upgrade if merge rates grow.
+
+  *Confirmed in practice (2026-08-02):* a ~60s `kannaka-crystal run` of a
+  KannakaHDL-grown architecture against the live data dir lost its
+  STABILIZE registrations to the archivist's per-event saves — exactly
+  this race. **Run experiments in an isolated lab**: copy the registry
+  into a scratch dir and point `KANNAKA_CRYSTAL_DATA_DIR` at it. If lab
+  runs become routine, a `run --data-dir` flag or advisory flock is the
+  v1.0 fix.
 - **Scale-out unit is the process, not the thread.** The engine is
   single-threaded on purpose (ADR-0001); "thousands of agents" means
   thousands of `explore` processes across machines sharing one NATS

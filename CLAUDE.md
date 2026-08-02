@@ -16,6 +16,10 @@ structures (Crystal Primitives) in simulated resonant media. See
 - Numerical changes to `src/field.rs` (viscosity, sponge, energy metric) are
   load-bearing — the integration tests in `tests/end_to_end.rs` encode why;
   read ADR-0001 before "simplifying" them
+- NEVER `kannaka-crystal run` experiments against the live data dir while
+  swarm agents (archivist/explorers) are running — registry writes race
+  (last-writer-wins, confirmed live). Copy registry.json to a scratch dir
+  and set `KANNAKA_CRYSTAL_DATA_DIR` (ADR-0002)
 
 ## Quick Reference
 
