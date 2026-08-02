@@ -2,6 +2,34 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.8.0 — 2026-08-02
+
+ADR-0004 Phase 1 (Provenance and Labels): the platform starts grading
+its own claims.
+
+### Added
+- **Experiment manifests** (§2): every `run` / `evolve` (CLI and API)
+  emits an immutable versioned manifest to
+  `<data_dir>/experiments/<id>.json` — engine/solver/encoder/dream/
+  detector/classifier/signature/fitness versions, material parameters in
+  force, environment, seed, program. The **experiment hash** covers the
+  protocol only (never results or timestamps), so identical protocols
+  hash identically and reproductions are detectable.
+- **Experiment provenance on primitives** (§6): new registrations carry
+  `experiment_id` + `experiment_hash` alongside the structure hash.
+  Pre-manifest rows load unchanged (`None`).
+- **Material model classification** (§1): materials declare `model_kind`
+  (all builtins: `phenomenological`), `validation_status`
+  (`uncalibrated`), `inspired_by`, and `references`. Display names for
+  real-substance presets now say "-Inspired" ("Europium-Inspired
+  Resonant Medium"); **ids are unchanged** — swarm units and KannakaHDL
+  queries keep working.
+- **Classification metadata** (§5): every detection carries
+  `classifier_version`, a margin-derived `classifier_confidence`, and
+  the raw morphology features it was derived from — plus a new
+  `Unknown` class instead of forcing weak regions into a named label.
+- `src/versions.rs` — the versioned algorithm identifiers.
+
 ## v0.7.0 — 2026-08-02
 
 ### Added

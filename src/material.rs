@@ -9,12 +9,41 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Material-model category (ADR-0004 §1). Every built-in preset is
+/// phenomenological: a parameter set that exhibits a useful qualitative
+/// behavior, with no claim to the governing physics of the named
+/// material. Physical / calibrated / hardware-profile models are earned
+/// through evidence, never assumed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    #[default]
+    Phenomenological,
+    Physical,
+    Calibrated,
+    HardwareProfile,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Material {
-    /// Stable identifier, e.g. `optical_cavity`.
+    /// Stable identifier, e.g. `optical_cavity`. NEVER renamed — swarm
+    /// unit files, KannakaHDL queries, and registry rows reference it.
     pub id: String,
     pub name: String,
     pub description: String,
+    /// ADR-0004 §1 model classification. Serde defaults keep old
+    /// user-defined material JSON loadable.
+    #[serde(default)]
+    pub model_kind: ModelKind,
+    /// "uncalibrated" until a calibration dataset is attached.
+    #[serde(default = "default_validation_status")]
+    pub validation_status: String,
+    /// What real system inspired the parameters (empty = abstract).
+    #[serde(default)]
+    pub inspired_by: Vec<String>,
+    /// Literature references backing a physical/calibrated claim.
+    #[serde(default)]
+    pub references: Vec<String>,
     /// Wave propagation speed in grid units per step (CFL-bounded by the engine).
     pub wave_speed: f64,
     /// Bulk amplitude damping per step (decay is information, not loss).
@@ -30,6 +59,31 @@ pub struct Material {
     pub thermal_noise_coupling: f64,
 }
 
+fn default_validation_status() -> String {
+    "uncalibrated".into()
+}
+
+/// Metadata defaults shared by every built-in preset (ADR-0004 §1):
+/// phenomenological, uncalibrated, no physical claim. Physics fields are
+/// placeholders — every builtin overrides them via struct update.
+fn phenomenological_defaults() -> Material {
+    Material {
+        id: String::new(),
+        name: String::new(),
+        description: String::new(),
+        model_kind: ModelKind::Phenomenological,
+        validation_status: default_validation_status(),
+        inspired_by: Vec::new(),
+        references: Vec::new(),
+        wave_speed: 0.0,
+        damping: 0.0,
+        boundary_reflect: 0.0,
+        nonlinearity: 0.0,
+        default_temperature_k: 0.0,
+        thermal_noise_coupling: 0.0,
+    }
+}
+
 impl Material {
     /// Effective per-step noise amplitude at a given temperature.
     pub fn thermal_noise(&self, temperature_k: f64) -> f64 {
@@ -39,6 +93,9 @@ impl Material {
 
 /// Built-in material plugins (PRD "Material Plugins"). User-defined materials
 /// can be loaded from JSON via [`Material`]'s `Deserialize` impl.
+///
+/// Display names for real-substance-inspired presets say "-Inspired"
+/// (ADR-0004 §1): evocative naming stays, implied physical fidelity goes.
 pub fn builtin_materials() -> Vec<Material> {
     vec![
         Material {
@@ -56,6 +113,7 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.0,
             default_temperature_k: 2.7,
             thermal_noise_coupling: 0.0,
+            ..phenomenological_defaults()
         },
         Material {
             id: "ideal_resonator".into(),
@@ -69,10 +127,12 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.02,
             default_temperature_k: 0.0,
             thermal_noise_coupling: 0.0,
+            ..phenomenological_defaults()
         },
         Material {
             id: "optical_cavity".into(),
-            name: "Optical Cavity".into(),
+            name: "Optical-Cavity-Inspired Medium".into(),
+            inspired_by: vec!["high-Q optical cavities".into()],
             description: "High-Q cavity: slow leak through partially silvered \
                           boundaries, mild saturation. Long-lived echo rings."
                 .into(),
@@ -82,10 +142,12 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.015,
             default_temperature_k: 293.0,
             thermal_noise_coupling: 0.0005,
+            ..phenomenological_defaults()
         },
         Material {
             id: "europium_crystal".into(),
-            name: "Europium Crystal (Cs2NaEuF6)".into(),
+            name: "Europium-Inspired Resonant Medium".into(),
+            inspired_by: vec!["Cs2NaEuF6 rare-earth optical memory systems".into()],
             description: "Rare-earth doped crystal model. Excellent persistence \
                           when cold (4 K), rapid dephasing when warm."
                 .into(),
@@ -95,10 +157,12 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.03,
             default_temperature_k: 4.0,
             thermal_noise_coupling: 0.004,
+            ..phenomenological_defaults()
         },
         Material {
             id: "silicon".into(),
-            name: "Silicon".into(),
+            name: "Silicon-Inspired Medium".into(),
+            inspired_by: vec!["crystalline silicon acoustics".into()],
             description: "Workhorse solid-state medium: moderate damping, \
                           moderate reflection, tolerant of room temperature."
                 .into(),
@@ -108,10 +172,12 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.01,
             default_temperature_k: 293.0,
             thermal_noise_coupling: 0.001,
+            ..phenomenological_defaults()
         },
         Material {
             id: "diamond_nv".into(),
-            name: "Diamond NV Centers".into(),
+            name: "Diamond-NV-Inspired Medium".into(),
+            inspired_by: vec!["diamond nitrogen-vacancy centers".into()],
             description: "Nitrogen-vacancy model: stiff lattice (fast waves), \
                           low damping, strong local nonlinearity around centers."
                 .into(),
@@ -121,6 +187,7 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.05,
             default_temperature_k: 293.0,
             thermal_noise_coupling: 0.0008,
+            ..phenomenological_defaults()
         },
         Material {
             id: "metamaterial".into(),
@@ -134,10 +201,12 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.08,
             default_temperature_k: 293.0,
             thermal_noise_coupling: 0.0003,
+            ..phenomenological_defaults()
         },
         Material {
             id: "graphene_model".into(),
-            name: "Graphene-inspired Model".into(),
+            name: "Graphene-Inspired Model".into(),
+            inspired_by: vec!["graphene membrane dynamics".into()],
             description: "2D sheet model: very fast propagation, weak damping, \
                           leaky edges. Structures spread wide and thin."
                 .into(),
@@ -147,6 +216,7 @@ pub fn builtin_materials() -> Vec<Material> {
             nonlinearity: 0.005,
             default_temperature_k: 293.0,
             thermal_noise_coupling: 0.0012,
+            ..phenomenological_defaults()
         },
     ]
 }
@@ -170,6 +240,14 @@ mod tests {
             assert!(m.wave_speed > 0.0 && m.wave_speed <= 0.7, "{} CFL", m.id);
             assert!((0.0..=1.0).contains(&m.boundary_reflect), "{}", m.id);
             assert!(m.damping >= 0.0 && m.damping < 0.1, "{}", m.id);
+            // ADR-0004 §1: every builtin is an honestly-labeled
+            // phenomenological, uncalibrated model; anything named after a
+            // real substance says so in its display name.
+            assert_eq!(m.model_kind, ModelKind::Phenomenological, "{}", m.id);
+            assert_eq!(m.validation_status, "uncalibrated", "{}", m.id);
+            if !m.inspired_by.is_empty() {
+                assert!(m.name.contains("Inspired"), "{}: {}", m.id, m.name);
+            }
         }
     }
 

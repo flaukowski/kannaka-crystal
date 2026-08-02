@@ -368,6 +368,9 @@ fn post_evolve(state: &AppState, body: &str) -> (u16, String) {
     if let Err(e) = registry.save() {
         return (500, error_json(&format!("registry save failed: {e}")));
     }
+    if let Err(e) = report.manifest.save() {
+        eprintln!("warning: manifest save failed: {e}");
+    }
     (200, serde_json::to_string(&report).unwrap())
 }
 
@@ -388,6 +391,9 @@ fn post_run(state: &AppState, body: &str) -> (u16, String) {
         Ok(report) => {
             if let Err(e) = registry.save() {
                 return (500, error_json(&format!("registry save failed: {e}")));
+            }
+            if let Err(e) = report.manifest.save() {
+                eprintln!("warning: manifest save failed: {e}");
             }
             (200, serde_json::to_string(&report).unwrap())
         }

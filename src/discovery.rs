@@ -110,6 +110,10 @@ pub struct EvolutionReport {
     pub evaluated: usize,
     pub best_fitness: f64,
     pub discovered: Vec<Primitive>,
+    /// ADR-0004 §2: the manifest for this evolution run. Callers persist
+    /// it with `report.manifest.save()`; every primitive registered by
+    /// the run links back to it.
+    pub manifest: crate::manifest::ExperimentManifest,
 }
 
 struct Scored {
@@ -169,6 +173,20 @@ pub fn evolve(
     registry: &mut Registry,
     mut progress: impl FnMut(String),
 ) -> EvolutionReport {
+    // ADR-0004 §2: the manifest is the experiment's identity; every
+    // primitive this run registers links to it by (id, protocol hash).
+    let material =
+        crate::material::find_material(&cfg.material_id).expect("material validated by caller");
+    let mut manifest = crate::manifest::ExperimentManifest::new(
+        &material,
+        cfg.field_size,
+        cfg.seed,
+        material.default_temperature_k,
+        0.0,
+        serde_json::json!({ "kind": "evolve", "config": cfg }),
+    );
+    let experiment = (manifest.experiment_id, manifest.experiment_hash());
+
     let mut rng = seeded_rng(cfg.seed.wrapping_add(0xC0FFEE));
     let mut population: Vec<Scored> = (0..cfg.population)
         .map(|_| Scored {
@@ -221,6 +239,7 @@ pub fn evolve(
                     &cfg.material_id,
                     lineage,
                     &format!("evolve gen {gen}"),
+                    Some(experiment.clone()),
                 ) {
                     progress(format!(
                         "  [gen {gen}] discovered {} ({}) persistence={:.1}% noise-tol={:.1}%",
@@ -253,11 +272,17 @@ pub fn evolve(
         ));
     }
 
+    manifest.results = serde_json::json!({
+        "evaluated": evaluated,
+        "best_fitness": best_fitness,
+        "discovered": discovered.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+    });
     EvolutionReport {
         generations_run: cfg.generations,
         evaluated,
         best_fitness,
         discovered,
+        manifest,
     }
 }
 
@@ -286,6 +311,17 @@ mod tests {
             for parent in &p.lineage {
                 assert!(registry.find(parent).is_some(), "dangling lineage {parent}");
             }
+        }
+        // ADR-0004: every primitive from this run links to its manifest,
+        // and the manifest's protocol hash matches.
+        let hash = report.manifest.experiment_hash();
+        for p in &registry.primitives {
+            assert_eq!(p.experiment_id, Some(report.manifest.experiment_id));
+            assert_eq!(p.experiment_hash.as_deref(), Some(hash.as_str()));
+            assert!(
+                p.classification.is_some(),
+                "classification metadata missing"
+            );
         }
     }
 

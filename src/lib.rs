@@ -27,6 +27,7 @@ pub mod field;
 pub mod material;
 pub mod primitives;
 pub mod pulse;
+pub mod versions;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod api;
@@ -34,6 +35,8 @@ pub mod api;
 pub mod discovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod lang;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod manifest;
 #[cfg(all(not(target_arch = "wasm32"), feature = "publish"))]
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]

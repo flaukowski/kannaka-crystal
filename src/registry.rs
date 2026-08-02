@@ -34,6 +34,18 @@ pub struct Primitive {
     pub discovered_at: DateTime<Utc>,
     /// Free-form provenance, e.g. "evolve gen 12" or "dream deep".
     pub provenance: String,
+    /// ADR-0004 §6 experiment provenance: the manifest that produced this
+    /// primitive. `None` on rows registered before manifests existed.
+    #[serde(default)]
+    pub experiment_id: Option<Uuid>,
+    /// Protocol hash of that manifest — identical protocols hash
+    /// identically, so reproductions are detectable.
+    #[serde(default)]
+    pub experiment_hash: Option<String>,
+    /// ADR-0004 §5 classification metadata (classifier version,
+    /// confidence, raw morphology features). `None` on pre-metadata rows.
+    #[serde(default)]
+    pub classification: Option<crate::primitives::Classification>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -110,6 +122,8 @@ impl Registry {
 
     /// Register a detected structure. Returns None if it duplicates an
     /// existing primitive (similarity >= 0.92 and same class).
+    /// `experiment` links the ADR-0004 manifest (id, protocol hash) that
+    /// produced this structure.
     #[allow(clippy::too_many_arguments)]
     pub fn register(
         &mut self,
@@ -120,6 +134,7 @@ impl Registry {
         material_id: &str,
         lineage: Vec<String>,
         provenance: &str,
+        experiment: Option<(Uuid, String)>,
     ) -> Option<Primitive> {
         let duplicate = self.primitives.iter().any(|p| {
             p.class == s.class && signature_similarity(&p.signature, &s.signature) >= 0.92
@@ -129,6 +144,10 @@ impl Registry {
         }
         self.next_serial += 1;
         let quantized: Vec<u8> = s.signature.iter().map(|v| (v * 255.0) as u8).collect();
+        let (experiment_id, experiment_hash) = match experiment {
+            Some((id, hash)) => (Some(id), Some(hash)),
+            None => (None, None),
+        };
         let prim = Primitive {
             id: format!("CRY-{:06}", self.next_serial),
             uuid: Uuid::new_v4(),
@@ -145,6 +164,9 @@ impl Registry {
             lineage,
             discovered_at: Utc::now(),
             provenance: provenance.to_string(),
+            experiment_id,
+            experiment_hash,
+            classification: Some(s.classification.clone()),
         };
         self.primitives.push(prim.clone());
         Some(prim)
@@ -276,6 +298,20 @@ mod tests {
         }
         DetectedStructure {
             class: PrimitiveClass::StandingEcho,
+            classification: crate::primitives::Classification {
+                display_class: "Standing Echo".into(),
+                primitive_domain: "morphological".into(),
+                classifier_version: crate::versions::CLASSIFIER_VERSION.into(),
+                classifier_confidence: 0.8,
+                features: crate::primitives::MorphologyFeatures {
+                    relative_area: 0.01,
+                    elongation: 1.2,
+                    annularity: 0.1,
+                    angular_gap_count: 0,
+                    occupied_bins: 16,
+                    stability_ratio: 2.5,
+                },
+            },
             centroid: (0.5, 0.5),
             area: 40,
             stability_score: 2.5,
@@ -287,14 +323,30 @@ mod tests {
     fn register_assigns_sequential_ids_and_rejects_duplicates() {
         let mut r = Registry::default();
         let s1 = fake_structure(0.13);
+        let experiment = Some((Uuid::new_v4(), "abc123".to_string()));
         let p1 = r
-            .register(&s1, 0.9, 0.8, vec![1.0, 0.9], "silicon", vec![], "test")
+            .register(
+                &s1,
+                0.9,
+                0.8,
+                vec![1.0, 0.9],
+                "silicon",
+                vec![],
+                "test",
+                experiment.clone(),
+            )
             .expect("first registration");
         assert_eq!(p1.id, "CRY-000001");
+        // ADR-0004: experiment provenance + classification metadata land.
+        assert_eq!(p1.experiment_id, experiment.as_ref().map(|(id, _)| *id));
+        assert_eq!(p1.experiment_hash.as_deref(), Some("abc123"));
+        let cls = p1.classification.expect("classification metadata");
+        assert_eq!(cls.classifier_version, crate::versions::CLASSIFIER_VERSION);
+        assert_eq!(cls.primitive_domain, "morphological");
 
         // Exact duplicate is rejected.
         assert!(r
-            .register(&s1, 0.9, 0.8, vec![], "silicon", vec![], "test")
+            .register(&s1, 0.9, 0.8, vec![], "silicon", vec![], "test", None)
             .is_none());
 
         // A different structure registers with the next serial.
@@ -307,9 +359,11 @@ mod tests {
                 "silicon",
                 vec![],
                 "test",
+                None,
             )
             .expect("second registration");
         assert_eq!(p2.id, "CRY-000002");
+        assert!(p2.experiment_id.is_none());
     }
 
     #[test]
@@ -325,6 +379,7 @@ mod tests {
             "vacuum",
             vec![],
             "rt",
+            None,
         );
         r.save().unwrap();
         let loaded = Registry::load().unwrap();
@@ -348,6 +403,7 @@ mod tests {
                 "silicon",
                 vec![],
                 "t",
+                None,
             );
         }
         assert!(r.primitives.len() > 10, "need a populated registry");
@@ -384,6 +440,7 @@ mod tests {
                 "silicon",
                 vec![],
                 "evolve gen 1",
+                None,
             )
             .unwrap();
 
@@ -407,6 +464,7 @@ mod tests {
             "silicon",
             vec![],
             "t",
+            None,
         );
         if let Some(nd) = near_dup {
             assert!(local.merge_remote(&nd, "crystal-def456").is_none());
@@ -424,6 +482,7 @@ mod tests {
             "silicon",
             vec![],
             "t",
+            None,
         );
         r.register(
             &fake_structure(0.77),
@@ -433,6 +492,7 @@ mod tests {
             "vacuum",
             vec![],
             "t",
+            None,
         );
         assert_eq!(r.search(Some("standing_echo"), None, 0.0).len(), 2);
         assert_eq!(
@@ -448,8 +508,8 @@ mod tests {
         let mut r = Registry::default();
         let a = fake_structure(0.13);
         let b = fake_structure(0.99);
-        r.register(&a, 0.9, 0.8, vec![], "silicon", vec![], "t");
-        r.register(&b, 0.9, 0.8, vec![], "silicon", vec![], "t");
+        r.register(&a, 0.9, 0.8, vec![], "silicon", vec![], "t", None);
+        r.register(&b, 0.9, 0.8, vec![], "silicon", vec![], "t", None);
         let hits = r.similar(&a.signature, 2);
         assert!(hits[0].0 > 0.999);
     }

@@ -122,6 +122,9 @@ mod tests {
             lineage: vec!["CRY-000003".into()],
             discovered_at: Utc::now(),
             provenance: "evolve gen 2".into(),
+            experiment_id: None,
+            experiment_hash: None,
+            classification: None,
         }
     }
 

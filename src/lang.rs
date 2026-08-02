@@ -44,6 +44,12 @@ pub struct StepOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgramReport {
     pub steps: Vec<StepOutput>,
+    /// ADR-0004 §2: the manifest for this program run. Callers persist it
+    /// with `report.manifest.save()`. Note the material/environment fields
+    /// reflect the engine at program START — the program source (carried
+    /// in `manifest.program`) is the authoritative protocol, including
+    /// any MATERIAL/SEED/TEMPERATURE/NOISE statements it contains.
+    pub manifest: crate::manifest::ExperimentManifest,
 }
 
 /// Parse and execute a Crystal program against an engine + registry.
@@ -52,6 +58,15 @@ pub fn run_program(
     engine: &mut CrystalEngine,
     registry: &mut Registry,
 ) -> Result<ProgramReport, LangError> {
+    let mut manifest = crate::manifest::ExperimentManifest::new(
+        &engine.material,
+        engine.field.size,
+        0,
+        engine.temperature_k,
+        engine.noise_amp,
+        serde_json::json!({ "kind": "crystal-program", "source": source }),
+    );
+    let experiment = (manifest.experiment_id, manifest.experiment_hash());
     let mut steps = Vec::new();
 
     for (lineno, raw) in source.lines().enumerate() {
@@ -147,6 +162,7 @@ pub fn run_program(
                         &engine.material.id,
                         vec![],
                         "stabilize",
+                        Some(experiment.clone()),
                     ) {
                         registered.push(p.id);
                     }
@@ -161,7 +177,7 @@ pub fn run_program(
             "MERGE" => {
                 let a = arg(args, 0, line, "primitive id")?.to_string();
                 let b = arg(args, 1, line, "primitive id")?.to_string();
-                merge_primitives(engine, registry, &a, &b, line)?
+                merge_primitives(engine, registry, &a, &b, line, &experiment)?
             }
             "SPLIT" => {
                 let id = arg(args, 0, line, "primitive id")?;
@@ -195,7 +211,8 @@ pub fn run_program(
         steps.push(StepOutput { line, op, detail });
     }
 
-    Ok(ProgramReport { steps })
+    manifest.results = serde_json::json!({ "steps": steps.len() });
+    Ok(ProgramReport { steps, manifest })
 }
 
 fn merge_primitives(
@@ -204,6 +221,7 @@ fn merge_primitives(
     a: &str,
     b: &str,
     line: usize,
+    experiment: &(uuid::Uuid, String),
 ) -> Result<serde_json::Value, LangError> {
     let pa = registry
         .find(a)
@@ -237,6 +255,7 @@ fn merge_primitives(
             &engine.material.id,
             vec![pa.id.clone(), pb.id.clone()],
             "merge",
+            Some(experiment.clone()),
         ) {
             child_id = Some(p.id);
         }

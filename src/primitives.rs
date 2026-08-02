@@ -4,6 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// **Morphological** primitive classes (ADR-0004 §5): observational
+/// labels from shape heuristics, never behavioral claims. A structure
+/// the heuristics cannot place confidently is `Unknown` — the system
+/// does not force every region into a named class.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PrimitiveClass {
     /// Annular structure — energy on a ring, quiet core.
@@ -18,6 +22,8 @@ pub enum PrimitiveClass {
     AttractorField,
     /// Small, very dense, very stable kernel.
     MemorySeed,
+    /// No morphological heuristic fired with confidence.
+    Unknown,
 }
 
 impl std::fmt::Display for PrimitiveClass {
@@ -29,15 +35,43 @@ impl std::fmt::Display for PrimitiveClass {
             PrimitiveClass::PhaseKnot => "Phase Knot",
             PrimitiveClass::AttractorField => "Attractor Field",
             PrimitiveClass::MemorySeed => "Memory Seed",
+            PrimitiveClass::Unknown => "Unknown",
         };
         write!(f, "{s}")
     }
+}
+
+/// The raw morphology features a classification was derived from
+/// (ADR-0004 §5) — kept so a future classifier version can re-classify
+/// without re-running the experiment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MorphologyFeatures {
+    pub relative_area: f64,
+    pub elongation: f64,
+    pub annularity: f64,
+    pub angular_gap_count: usize,
+    pub occupied_bins: usize,
+    pub stability_ratio: f64,
+}
+
+/// Explicit classification metadata (ADR-0004 §5): the label, the
+/// domain it belongs to (morphological, never behavioral), the
+/// classifier version that produced it, and how confident it was.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Classification {
+    pub display_class: String,
+    pub primitive_domain: String,
+    pub classifier_version: String,
+    pub classifier_confidence: f64,
+    pub features: MorphologyFeatures,
 }
 
 /// A detected (not yet registered) structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedStructure {
     pub class: PrimitiveClass,
+    /// Full classification metadata for the label above.
+    pub classification: Classification,
     pub centroid: (f64, f64),
     /// Cell count of the connected region.
     pub area: usize,
@@ -169,18 +203,25 @@ fn analyze_region(
         }
     }
 
-    let class = classify(
-        area,
-        field_area,
+    let features = MorphologyFeatures {
+        relative_area: area as f64 / field_area as f64,
         elongation,
         annularity,
-        stability_score,
-        occupied,
-        gaps,
-    );
+        angular_gap_count: gaps,
+        occupied_bins: occupied,
+        stability_ratio: stability_score,
+    };
+    let (class, confidence) = classify(&features);
 
     DetectedStructure {
         class,
+        classification: Classification {
+            display_class: class.to_string(),
+            primitive_domain: "morphological".into(),
+            classifier_version: crate::versions::CLASSIFIER_VERSION.into(),
+            classifier_confidence: confidence,
+            features,
+        },
         centroid: (cx / size as f64, cy / size as f64),
         area,
         stability_score,
@@ -188,29 +229,44 @@ fn analyze_region(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn classify(
-    area: usize,
-    field_area: usize,
-    elongation: f64,
-    annularity: f64,
-    stability: f64,
-    occupied_bins: usize,
-    gaps: usize,
-) -> PrimitiveClass {
-    let rel_area = area as f64 / field_area as f64;
-    if annularity > 0.45 && occupied_bins >= 12 {
-        PrimitiveClass::EchoRing
-    } else if elongation > 2.5 {
-        PrimitiveClass::HarmonicBridge
-    } else if gaps >= 3 {
-        PrimitiveClass::PhaseKnot
-    } else if rel_area > 0.08 {
-        PrimitiveClass::AttractorField
-    } else if rel_area < 0.01 && stability > 3.0 {
-        PrimitiveClass::MemorySeed
+/// First-match morphological heuristics with a margin-derived confidence
+/// in [0.3, 0.95]: how far past its decision threshold the winning rule
+/// fired. A region that only reaches the fallthrough with weak stability
+/// is `Unknown` — better an honest non-answer than a forced label
+/// (ADR-0004 §5).
+fn classify(f: &MorphologyFeatures) -> (PrimitiveClass, f64) {
+    let conf = |margin: f64| 0.55 + 0.4 * margin.clamp(0.0, 1.0);
+    if f.annularity > 0.45 && f.occupied_bins >= 12 {
+        let margin = ((f.annularity - 0.45) / 0.3).min((f.occupied_bins as f64 - 12.0) / 4.0);
+        (PrimitiveClass::EchoRing, conf(margin))
+    } else if f.elongation > 2.5 {
+        (
+            PrimitiveClass::HarmonicBridge,
+            conf((f.elongation - 2.5) / 2.0),
+        )
+    } else if f.angular_gap_count >= 3 {
+        (
+            PrimitiveClass::PhaseKnot,
+            conf((f.angular_gap_count as f64 - 2.0) / 3.0),
+        )
+    } else if f.relative_area > 0.08 {
+        (
+            PrimitiveClass::AttractorField,
+            conf((f.relative_area - 0.08) / 0.08),
+        )
+    } else if f.relative_area < 0.01 && f.stability_ratio > 3.0 {
+        (
+            PrimitiveClass::MemorySeed,
+            conf((f.stability_ratio - 3.0) / 2.0),
+        )
+    } else if f.stability_ratio >= 1.3 {
+        (
+            PrimitiveClass::StandingEcho,
+            conf((f.stability_ratio - 1.3) / 1.5),
+        )
     } else {
-        PrimitiveClass::StandingEcho
+        // Barely above the field mean and no shape heuristic fired.
+        (PrimitiveClass::Unknown, 0.3)
     }
 }
 

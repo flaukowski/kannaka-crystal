@@ -142,6 +142,12 @@ fn dispatch(command: Command) -> Result<(), String> {
             let report =
                 run_program(&source, &mut engine, &mut registry).map_err(|e| e.to_string())?;
             registry.save().map_err(|e| e.to_string())?;
+            let manifest_path = report.manifest.save()?;
+            eprintln!(
+                "experiment {} -> {}",
+                report.manifest.experiment_id,
+                manifest_path.display()
+            );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
             Ok(())
         }
@@ -163,12 +169,15 @@ fn dispatch(command: Command) -> Result<(), String> {
             let mut registry = Registry::load().map_err(|e| e.to_string())?;
             let report = evolve(&cfg, &mut registry, |line| println!("{line}"));
             registry.save().map_err(|e| e.to_string())?;
+            let manifest_path = report.manifest.save()?;
             println!(
-                "\nevolution complete: {} evaluations, best fitness {:.3}, {} new primitives ({} total)",
+                "\nevolution complete: {} evaluations, best fitness {:.3}, {} new primitives ({} total)\nexperiment {} -> {}",
                 report.evaluated,
                 report.best_fitness,
                 report.discovered.len(),
-                registry.primitives.len()
+                registry.primitives.len(),
+                report.manifest.experiment_id,
+                manifest_path.display()
             );
             Ok(())
         }
