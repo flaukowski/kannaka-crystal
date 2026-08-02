@@ -37,12 +37,6 @@ dirs = "5"
 # a research surface, not a high-concurrency service.
 tiny_http = "0.12"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-# rand's default `getrandom` feature needs the js backend on wasm32 even
-# though every RNG we expose is ChaCha8-seeded (determinism is the point).
-getrandom = { version = "0.2", features = ["js"] }
-
 # NATS swarm integration (Explorer/Optimizer/Classifier/Dreamer agents publish
 # and subscribe here). NOT in default features — mirrors kannaka-memory's
 # `bridge` pattern so CI/default builds never pull a network stack.
@@ -57,6 +51,16 @@ futures = { version = "0.3", optional = true }
 # Optional so lean/dev builds skip the HTTP+TLS client; release binaries are
 # built WITH this feature (see .github/workflows/release.yml).
 ureq = { version = "3", features = ["json"], optional = true }
+
+# TOML gotcha that broke the v0.7.0 release the first time: everything
+# below a [target...] header BELONGS to that table. The optional feature
+# deps above must stay under the not(wasm32) table (or [dependencies]) —
+# the wasm table must therefore be the LAST dependency section.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+# rand's default `getrandom` feature needs the js backend on wasm32 even
+# though every RNG we expose is ChaCha8-seeded (determinism is the point).
+getrandom = { version = "0.2", features = ["js"] }
 
 [features]
 default = []
