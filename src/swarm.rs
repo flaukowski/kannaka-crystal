@@ -49,6 +49,15 @@ async fn connect() -> Result<async_nats::Client, String> {
             .credentials_file(&creds)
             .await
             .map_err(|e| format!("NATS creds {creds}: {e}"))?;
+    } else if let (Ok(user), Ok(pass)) =
+        (std::env::var("NATS_USER"), std::env::var("NATS_PASSWORD"))
+    {
+        // Constellation convention (kannaka-memory, radio, disk-monitor all
+        // read these): the swarm server's ANONYMOUS user is a read-only
+        // mirror limited to a curated subject allowlist, and it denies
+        // everything else SILENTLY — publishes vanish and subscriptions
+        // yield nothing. kannaka.crystal.* needs the authenticated user.
+        options = options.user_and_password(user, pass);
     }
     options
         .connect(&url)
