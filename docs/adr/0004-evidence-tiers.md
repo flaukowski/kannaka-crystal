@@ -1,6 +1,6 @@
 # ADR-0004: Establish a Research Validity and Primitive Evidence Model
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-08-02)
 - **Date:** 2026-08-02
 - **Decision Owners:** Kannaka Crystal maintainers
 - **Applies To:** Crystal Engine, Crystal Foundry, Crystal Registry, Crystal Observatory, swarm explorers, experiment emitters
