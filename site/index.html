@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kannaka Crystal — Informational Materials</title>
+<style>
+  :root { --bg:#0a0a14; --panel:#121222; --edge:#2a2a4a; --text:#c8c8e8; --accent:#8f6fff; --glow:#b49aff; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; padding: 1.2rem; max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 1.15rem; letter-spacing: .35em; color: var(--glow); font-weight: 400; }
+  h1 b { color: var(--accent); }
+  .tagline { color:#9f9fc8; font-size:.85rem; margin:.5rem 0 1rem; max-width: 70ch; }
+  .tagline em { color: var(--glow); font-style: normal; }
+  .links { display:flex; gap:.6rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .links a { color: var(--glow); border:1px solid var(--edge); border-radius:5px; padding:.35rem .8rem; font-size:.75rem; text-decoration:none; }
+  .links a:hover { border-color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: .8rem; }
+  .panel h2 { font-size: .7rem; text-transform: uppercase; letter-spacing: .2em; color: #7f7fb0; margin-bottom: .6rem; }
+  canvas { width:100%; border-radius:4px; display:block; background:#0d0d1a; cursor:crosshair; }
+  .controls { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.8rem; align-items:center; }
+  button, select { background:#1c1c34; color:var(--text); border:1px solid var(--edge); border-radius:5px; padding:.35rem .7rem; font-size:.75rem; }
+  button:hover { border-color: var(--accent); cursor:pointer; }
+  .legend { display:flex; flex-wrap:wrap; gap:.6rem; font-size:.68rem; margin-top:.5rem; color:#9f9fc8; }
+  .legend span::before { content:"●"; margin-right:.25rem; }
+  #gene-tip { position:fixed; pointer-events:none; background:#1c1c34; border:1px solid var(--accent); border-radius:5px; padding:.4rem .6rem; font-size:.7rem; display:none; z-index:10; }
+  footer { color:#5f5f88; font-size:.7rem; margin-top:1rem; }
+</style>
+</head>
+<body>
+<h1><b>KANNAKA</b> CRYSTAL</h1>
+<p class="tagline">
+  An open research platform for <em>informational materials</em>: media whose computational
+  behavior emerges from resonance and interference rather than explicit programming.
+  Memories are not stored — they resonate, decay, dream, and crystallize into reusable
+  <em>Crystal Primitives</em>. Below: a real registry snapshot from the discovery swarm,
+  replayed as it grew — each dot is a primitive appearing beside its lineage parent.
+</p>
+<div class="links">
+  <a href="https://github.com/flaukowski/kannaka-crystal">GitHub</a>
+  <a href="https://github.com/flaukowski/kannaka-crystal/releases">Releases (Win / Linux / macOS)</a>
+  <a href="https://github.com/flaukowski/kannaka-crystal/blob/master/docs/adr/0001-mvp-architecture.md">ADR-0001 Architecture</a>
+  <a href="https://github.com/flaukowski/kannaka-crystal/blob/master/docs/adr/0002-swarm-exploration.md">ADR-0002 Swarm</a>
+  <a href="https://github.com/flaukowski/kannaka-crystal/blob/master/docs/adr/0003-morpho-composition-layer.md">ADR-0003 Composition</a>
+</div>
+
+<div class="panel">
+  <h2>Genealogy — a swarm registry snapshot, growing (fill = class · ring = origin node · radius = persistence)</h2>
+  <canvas id="gene-canvas" width="1200" height="640"></canvas>
+  <div class="controls">
+    <button onclick="geneRegrow()">RE-GROW</button>
+    <button id="gene-pause" onclick="geneTogglePause()">PAUSE</button>
+    <label>speed <select id="gene-speed" onchange="geneSpeed=+this.value">
+      <option value="2">slow</option><option value="8" selected>normal</option><option value="30">fast</option>
+    </select></label>
+    <span id="gene-count" style="font-size:.7rem;color:#7f7fb0"></span>
+  </div>
+  <div class="legend" id="gene-legend"></div>
+</div>
+<div id="gene-tip"></div>
+<footer>
+  Snapshot exported from a live 6-agent swarm (2 Windows explorers + 3 Oracle Cloud explorers + archivist)
+  coordinating over NATS. Run your own: <code>kannaka-crystal serve</code> · Space Child License v1.0 — free for peaceful use.
+</footer>
+
+<script>
+/* Standalone build of the Observatory's genealogy replay (v0.6.0),
+   fed by a static snapshot instead of the live /genealogy endpoint. */
+const CLASS_HUES = {
+  'Standing Echo': 265, 'Echo Ring': 190, 'Harmonic Bridge': 35,
+  'Phase Knot': 330, 'Attractor Field': 130, 'Memory Seed': 55,
+};
+const MAX_VISIBLE = 500;
+
+const gcv = document.getElementById('gene-canvas');
+const gtx = gcv.getContext('2d');
+const tip = document.getElementById('gene-tip');
+
+let geneAll = [];
+let genePending = [];
+let geneNodes = [];
+let geneById = new Map();
+let geneEdges = [];
+let geneSpeed = 8;
+let genePaused = false;
+let spawnCarry = 0;
+
+function originHue(origin) {
+  let h = 0;
+  for (const c of origin) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
+function spawnNode(p) {
+  const parent = p.lineage && p.lineage.length ? geneById.get(p.lineage[0]) : null;
+  const cx = gcv.width / 2, cy = gcv.height / 2;
+  const a = Math.random() * Math.PI * 2;
+  const x = parent ? parent.x + Math.cos(a) * 18 : cx + Math.cos(a) * (60 + Math.random() * 200);
+  const y = parent ? parent.y + Math.sin(a) * 18 : cy + Math.sin(a) * (40 + Math.random() * 140);
+  const n = { p, x, y, vx: 0, vy: 0, born: performance.now() };
+  geneById.set(p.id, n);
+  geneNodes.push(n);
+  for (const parentId of p.lineage || []) {
+    const pn = geneById.get(parentId);
+    if (pn) geneEdges.push([geneNodes.indexOf(pn), geneNodes.length - 1]);
+  }
+  if (geneNodes.length > MAX_VISIBLE) trimOldest();
+}
+
+function trimOldest() {
+  const drop = geneNodes.length - MAX_VISIBLE;
+  const dropped = geneNodes.splice(0, drop);
+  for (const d of dropped) geneById.delete(d.p.id);
+  geneEdges = geneEdges
+    .map(([a, b]) => [a - drop, b - drop])
+    .filter(([a, b]) => a >= 0 && b >= 0);
+}
+
+function stepSim(dt) {
+  const n = geneNodes.length;
+  if (!n) return;
+  const cx = gcv.width / 2, cy = gcv.height / 2;
+  for (let i = 0; i < n; i++) {
+    const a = geneNodes[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = geneNodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 1) { dx = Math.random() - .5; dy = Math.random() - .5; d2 = 1; }
+      if (d2 > 40000) continue;
+      const f = 900 / d2;
+      const d = Math.sqrt(d2);
+      a.vx += f * dx / d; a.vy += f * dy / d;
+      b.vx -= f * dx / d; b.vy -= f * dy / d;
+    }
+  }
+  for (const [ia, ib] of geneEdges) {
+    const a = geneNodes[ia], b = geneNodes[ib];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const f = (d - 34) * 0.03;
+    a.vx += f * dx / d; a.vy += f * dy / d;
+    b.vx -= f * dx / d; b.vy -= f * dy / d;
+  }
+  for (const nd of geneNodes) {
+    nd.vx += (cx - nd.x) * 0.0012; nd.vy += (cy - nd.y) * 0.0012;
+    nd.vx *= 0.86; nd.vy *= 0.86;
+    nd.x += nd.vx * dt * 60; nd.y += nd.vy * dt * 60;
+  }
+}
+
+function drawGene() {
+  gtx.clearRect(0, 0, gcv.width, gcv.height);
+  gtx.lineWidth = 1;
+  gtx.strokeStyle = 'rgba(143,111,255,0.25)';
+  gtx.beginPath();
+  for (const [ia, ib] of geneEdges) {
+    const a = geneNodes[ia], b = geneNodes[ib];
+    gtx.moveTo(a.x, a.y); gtx.lineTo(b.x, b.y);
+  }
+  gtx.stroke();
+  const now = performance.now();
+  for (const nd of geneNodes) {
+    const hue = CLASS_HUES[nd.p.class] ?? 0;
+    const r = 3 + nd.p.persistence * 5;
+    const pop = Math.max(0, 1 - (now - nd.born) / 600);
+    gtx.beginPath();
+    gtx.arc(nd.x, nd.y, r + pop * 6, 0, Math.PI * 2);
+    gtx.fillStyle = `hsl(${hue} 70% ${55 + pop * 30}%)`;
+    gtx.fill();
+    if (nd.p.origin !== 'local') {
+      gtx.lineWidth = 1.5;
+      gtx.strokeStyle = `hsl(${originHue(nd.p.origin)} 80% 65%)`;
+      gtx.stroke();
+    }
+  }
+  document.getElementById('gene-count').textContent =
+    `${geneNodes.length} shown / ${geneAll.length} in snapshot` +
+    (genePending.length ? ` (+${genePending.length} queued)` : '');
+}
+
+let lastFrame = performance.now();
+function geneLoop(t) {
+  const dt = Math.min((t - lastFrame) / 1000, 0.05);
+  lastFrame = t;
+  if (!genePaused) {
+    spawnCarry += geneSpeed * dt;
+    while (spawnCarry >= 1 && genePending.length) {
+      spawnNode(genePending.shift());
+      spawnCarry -= 1;
+    }
+    stepSim(dt);
+  }
+  drawGene();
+  requestAnimationFrame(geneLoop);
+}
+
+function buildLegend() {
+  const origins = [...new Set(geneAll.map(p => p.origin))];
+  const el = document.getElementById('gene-legend');
+  el.innerHTML =
+    Object.entries(CLASS_HUES).map(([c, h]) =>
+      `<span style="color:hsl(${h} 70% 60%)">${c}</span>`).join('') +
+    origins.map(o =>
+      `<span style="color:hsl(${o === 'local' ? 0 : originHue(o)} ${o === 'local' ? 0 : 80}% 65%)">◍ ${o}</span>`).join('');
+}
+
+function geneRegrow() {
+  geneNodes = []; geneEdges = []; geneById = new Map();
+  genePending = geneAll.slice(-MAX_VISIBLE * 2);
+  spawnCarry = 0;
+}
+function geneTogglePause() {
+  genePaused = !genePaused;
+  document.getElementById('gene-pause').textContent = genePaused ? 'PLAY' : 'PAUSE';
+}
+
+gcv.addEventListener('mousemove', ev => {
+  const rect = gcv.getBoundingClientRect();
+  const sx = gcv.width / rect.width, sy = gcv.height / rect.height;
+  const mx = (ev.clientX - rect.left) * sx, my = (ev.clientY - rect.top) * sy;
+  let best = null, bd = 144;
+  for (const nd of geneNodes) {
+    const d = (nd.x - mx) ** 2 + (nd.y - my) ** 2;
+    if (d < bd) { bd = d; best = nd; }
+  }
+  if (best) {
+    tip.style.display = 'block';
+    tip.style.left = (ev.clientX + 14) + 'px';
+    tip.style.top = (ev.clientY + 14) + 'px';
+    tip.innerHTML = `<b>${best.p.id}</b> — ${best.p.class}<br>` +
+      `persistence ${(best.p.persistence * 100).toFixed(1)}% · ${best.p.material}<br>` +
+      `origin: ${best.p.origin}` +
+      (best.p.lineage.length ? `<br>lineage: ${best.p.lineage.join(' ← ')}` : '');
+  } else tip.style.display = 'none';
+});
+gcv.addEventListener('mouseleave', () => tip.style.display = 'none');
+
+fetch('genealogy.json')
+  .then(r => r.json())
+  .then(rows => {
+    rows.sort((a, b) => a.at - b.at);
+    geneAll = rows;
+    buildLegend();
+    geneRegrow();
+  });
+requestAnimationFrame(geneLoop);
+</script>
+</body>
+</html>
