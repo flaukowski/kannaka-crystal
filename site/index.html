@@ -44,6 +44,37 @@
   <a href="https://github.com/flaukowski/kannaka-crystal/blob/master/docs/adr/0003-morpho-composition-layer.md">ADR-0003 Composition</a>
 </div>
 
+<div class="panel" id="live-panel" style="display:none; margin-bottom:1rem">
+  <h2>Live Engine — the actual resonance medium, compiled to WASM, running in your browser</h2>
+  <div style="display:grid; grid-template-columns:minmax(260px,420px) 1fr; gap:1rem">
+    <canvas id="live-field" width="64" height="64" style="image-rendering:pixelated"></canvas>
+    <div>
+      <div class="controls" style="margin-top:0">
+        <select id="live-mat"></select>
+        <input id="live-text" placeholder="write a memory…" style="width:11rem">
+        <button onclick="lcWrite()">WRITE</button>
+        <button onclick="lcPulse()">PULSE</button>
+        <button onclick="lcDream()">DREAM DEEP</button>
+        <button onclick="lcReset()">RESET</button>
+      </div>
+      <div class="controls">
+        <input id="live-probe" placeholder="probe text…" style="width:11rem">
+        <button onclick="lcProbe()">PROBE</button>
+        <span id="live-probe-out" style="font-size:.75rem;color:var(--glow)"></span>
+      </div>
+      <p style="font-size:.75rem;color:#9f9fc8;margin-top:.6rem">
+        step <b id="live-step" style="color:var(--glow)">0</b> ·
+        energy <b id="live-energy" style="color:var(--glow)">0</b> ·
+        <span id="live-msg"></span>
+      </p>
+      <p style="font-size:.7rem;color:#5f5f88;margin-top:.4rem">
+        Same leapfrog wave engine as the native build — deterministic, ChaCha8-seeded.
+        Write text, watch it interfere, dream to consolidate, probe to recall.
+      </p>
+    </div>
+  </div>
+</div>
+
 <div class="panel">
   <h2>Genealogy — a swarm registry snapshot, growing (fill = class · ring = origin node · radius = persistence)</h2>
   <canvas id="gene-canvas" width="1200" height="640"></canvas>
@@ -245,6 +276,74 @@ fetch('genealogy.json')
     geneRegrow();
   });
 requestAnimationFrame(geneLoop);
+</script>
+<script type="module">
+/* Live in-browser engine (wasm). Panel stays hidden if pkg/ is absent
+   (e.g. a local preview without a wasm build). */
+try {
+  const mod = await import('./pkg/kannaka_crystal.js');
+  await mod.default();
+  const { CrystalWasm, materials_json } = mod;
+
+  const panel = document.getElementById('live-panel');
+  const cv = document.getElementById('live-field');
+  const ctx = cv.getContext('2d');
+  const matSel = document.getElementById('live-mat');
+  for (const m of JSON.parse(materials_json())) {
+    const o = document.createElement('option');
+    o.value = m.id; o.textContent = m.id;
+    if (m.id === 'metamaterial') o.selected = true;
+    matSel.appendChild(o);
+  }
+  let kc = new CrystalWasm('metamaterial', 96, 21);
+  panel.style.display = 'block';
+
+  window.lcReset = () => { kc.free?.(); kc = new CrystalWasm(matSel.value, 96, 21); msg('fresh ' + matSel.value + ' field'); };
+  matSel.onchange = window.lcReset;
+  window.lcWrite = () => {
+    const t = document.getElementById('live-text').value.trim();
+    if (t) { kc.write(t, 1.0); msg('wrote "' + t.slice(0, 24) + '"'); }
+  };
+  window.lcPulse = () => {
+    kc.pulse(0.2 + Math.random() * 0.6, 0.2 + Math.random() * 0.6, 0.08, 1.5, 1.5, 0);
+    msg('pulsed');
+  };
+  window.lcDream = () => {
+    const r = JSON.parse(kc.dream(true));
+    msg('dreamed: pruned ' + (r.pruned_fraction * 100).toFixed(0) + '%, energy ' +
+        r.energy_before.toFixed(0) + ' → ' + r.energy_after.toFixed(0));
+  };
+  window.lcProbe = () => {
+    const t = document.getElementById('live-probe').value.trim();
+    if (t) document.getElementById('live-probe-out').textContent =
+      'resonance ' + kc.probe(t).toFixed(3);
+  };
+  function msg(s) { document.getElementById('live-msg').textContent = s; }
+
+  function draw() {
+    const cells = kc.field(64);
+    const img = ctx.createImageData(64, 64);
+    let max = 1e-9;
+    for (const v of cells) if (v > max) max = v;
+    for (let i = 0; i < cells.length; i++) {
+      const t = Math.pow(cells[i] / max, 0.5);
+      img.data[i * 4] = 20 + 160 * t;
+      img.data[i * 4 + 1] = 10 + 60 * t;
+      img.data[i * 4 + 2] = 40 + 215 * t;
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  (function loop() {
+    kc.resonate(2);
+    draw();
+    document.getElementById('live-step').textContent = kc.step_count();
+    document.getElementById('live-energy').textContent = kc.energy().toExponential(1);
+    requestAnimationFrame(loop);
+  })();
+} catch (e) {
+  console.log('wasm engine unavailable:', e);
+}
 </script>
 </body>
 </html>

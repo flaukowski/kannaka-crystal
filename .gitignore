@@ -4,3 +4,4 @@
 *.creds
 registry.json
 /target-publish
+site/pkg/

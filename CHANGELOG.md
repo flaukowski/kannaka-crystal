@@ -2,6 +2,24 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.7.0 — 2026-08-02
+
+### Added
+- **In-browser engine (WASM)** — the full engine core (field, materials,
+  pulse, dream, probe, detect) compiles to wasm32 and runs live on the
+  Pages site: write text, watch it interfere at 60fps, dream, probe —
+  deterministic ChaCha8-seeded, so browser runs replay lab runs exactly.
+  Modules split target-wise: filesystem/network surfaces (api, registry,
+  discovery, lang, swarm, publish) stay native-only.
+- Pages workflow builds the wasm engine with wasm-pack on every deploy;
+  wasm-opt disabled for deterministic cross-platform builds.
+
+### Sibling
+- **KannakaHDL** lives in its own repo from today:
+  https://github.com/flaukowski/kannaka-hdl — the ADR-0003 Part 2
+  composition language (grow architectures from this registry's
+  primitives), evolving separately.
+
 ## v0.6.0 — 2026-08-02
 
 ### Added

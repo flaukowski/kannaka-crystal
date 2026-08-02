@@ -18,17 +18,28 @@
 //! - [`api`] — REST API + embedded Observatory.
 //! - `swarm` (feature `swarm`) — NATS agents (Explorer et al.).
 
-pub mod api;
-pub mod discovery;
+// The engine core (field/material/pulse/engine/dream/primitives) is
+// target-agnostic and compiles to wasm32 for the in-browser Pages demo.
+// Everything touching the filesystem, network, or clocks stays native.
 pub mod dream;
 pub mod engine;
 pub mod field;
-pub mod lang;
 pub mod material;
 pub mod primitives;
-#[cfg(feature = "publish")]
-pub mod publish;
 pub mod pulse;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod api;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod discovery;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod lang;
+#[cfg(all(not(target_arch = "wasm32"), feature = "publish"))]
+pub mod publish;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod registry;
-#[cfg(feature = "swarm")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "swarm"))]
 pub mod swarm;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
