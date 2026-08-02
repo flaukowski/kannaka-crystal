@@ -50,6 +50,13 @@ enum Command {
         population: usize,
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// Robust mode: fitness includes in-loop survival across shifted
+        /// seeds x noise — selects attractors, not one-trajectory artifacts
+        #[arg(long)]
+        robust: bool,
+        /// Seeds per noise level for the robust ensemble
+        #[arg(long, default_value_t = 3)]
+        robust_seeds: u64,
     },
     /// Run a standalone dream (consolidation) experiment
     Dream {
@@ -196,12 +203,15 @@ fn dispatch(command: Command) -> Result<(), String> {
             generations,
             population,
             seed,
+            robust,
+            robust_seeds,
         } => {
             let cfg = EvolutionConfig {
                 material_id: material,
                 generations,
                 population,
                 seed,
+                robust_seeds: if robust { robust_seeds } else { 0 },
                 ..Default::default()
             };
             kannaka_crystal::material::find_material(&cfg.material_id)

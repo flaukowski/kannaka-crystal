@@ -2,6 +2,25 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.13.0 — 2026-08-02
+
+Robust-mode evolution. The full evidence-chain sweep showed classic
+fitness (persistence + novelty on one noise-free trajectory) selects
+structures with ~0 perturbation survival: 27/27 replicated at L2,
+0/27 survived the §8 ensemble. Robustness must be selected for, not
+hoped for.
+
+### Added
+- `evolve --robust [--robust-seeds 3]`: fitness gains an in-loop
+  survival term — each candidate's best structure must re-emerge
+  (same class, similarity ≥ 0.92, the Level-3 standard) across shifted
+  seeds × noise levels (default 0.01/0.05). Survival ∈ [0,1] enters
+  fitness at weight 1.0, so it dominates selection once any genome
+  shows nonzero survival. Discovery lines report `survival=`.
+- `EvolutionConfig.robust_seeds` / `robust_noise_levels` (serde-default
+  0/empty = classic behavior, old manifests unaffected); robust config
+  is part of the generating protocol and changes the experiment hash.
+
 ## v0.12.0 — 2026-08-02
 
 ADR-0004 Phase 4.1 (manifest closure): evidence procedures replay a

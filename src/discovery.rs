@@ -9,12 +9,25 @@
 use crate::dream::{dream, DreamMode};
 use crate::engine::CrystalEngine;
 use crate::field::seeded_rng;
-use crate::primitives::detect_structures;
+use crate::primitives::{detect_structures, signature_similarity};
 use crate::pulse::Pulse;
 use crate::registry::{Primitive, Registry};
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
+
+/// Robust mode (ADR-0004 follow-through on the 0/27 perturbation sweep):
+/// survival uses the same standard as the Level-3 procedure — the base
+/// run's best structure must re-emerge (same class, similarity ≥ 0.92)
+/// under a shifted seed + ambient noise.
+const ROBUST_SIMILARITY: f64 = 0.92;
+/// Weight of the survival term in fitness. Survival ∈ [0,1]; persistence
+/// tops out ~0.85, so at 1.0 robustness dominates selection once any
+/// genome shows nonzero survival.
+const ROBUST_WEIGHT: f64 = 1.0;
+/// Default in-loop noise levels when robust mode is on and the config
+/// doesn't specify any (a cheap subset of the §8 ensemble).
+const ROBUST_DEFAULT_NOISE: [f64; 2] = [0.01, 0.05];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Genome {
@@ -103,6 +116,17 @@ pub struct EvolutionConfig {
     /// protocols with this raised.
     #[serde(default)]
     pub ambient_noise: f64,
+    /// Robust mode: seeds per noise level for the in-loop survival
+    /// ensemble. 0 (default) = classic fitness (persistence + novelty),
+    /// which the 08-02 sweep showed selects structures with ~0 §8
+    /// survival. > 0 adds `ROBUST_WEIGHT × survival` to fitness so
+    /// selection favors attractors of the medium over artifacts of one
+    /// noise-free trajectory.
+    #[serde(default)]
+    pub robust_seeds: u64,
+    /// Noise levels for the in-loop ensemble; empty = ROBUST_DEFAULT_NOISE.
+    #[serde(default)]
+    pub robust_noise_levels: Vec<f64>,
 }
 
 impl Default for EvolutionConfig {
@@ -115,6 +139,8 @@ impl Default for EvolutionConfig {
             seed: 0,
             noise_probe_amp: 0.02,
             ambient_noise: 0.0,
+            robust_seeds: 0,
+            robust_noise_levels: vec![],
         }
     }
 }
@@ -248,7 +274,40 @@ pub fn evolve(
                 .first()
                 .map(|st| 1.0 - registry.max_similarity(&st.signature))
                 .unwrap_or(0.0);
-            s.fitness = persistence + 0.5 * novelty;
+            // Robust mode: in-loop §8-style survival ensemble.
+            let survival = if cfg.robust_seeds > 0 {
+                let survival = structures
+                    .first()
+                    .map(|best| {
+                        let levels: &[f64] = if cfg.robust_noise_levels.is_empty() {
+                            &ROBUST_DEFAULT_NOISE
+                        } else {
+                            &cfg.robust_noise_levels
+                        };
+                        let mut survived = 0usize;
+                        for shift in 1..=cfg.robust_seeds {
+                            for &noise in levels {
+                                let mut ecfg = cfg.clone();
+                                ecfg.seed = cfg.seed.wrapping_add(1000 + shift);
+                                let (_, estructs, _) = evaluate(&s.genome, &ecfg, noise);
+                                evaluated += 1;
+                                if estructs.iter().any(|st| {
+                                    st.class == best.class
+                                        && signature_similarity(&st.signature, &best.signature)
+                                            >= ROBUST_SIMILARITY
+                                }) {
+                                    survived += 1;
+                                }
+                            }
+                        }
+                        survived as f64 / (cfg.robust_seeds as usize * levels.len()) as f64
+                    })
+                    .unwrap_or(0.0);
+                Some(survival)
+            } else {
+                None
+            };
+            s.fitness = persistence + 0.5 * novelty + ROBUST_WEIGHT * survival.unwrap_or(0.0);
             best_fitness = best_fitness.max(s.fitness);
 
             // Register anything stable AND novel.
@@ -281,11 +340,14 @@ pub fn evolve(
                     Some((s.genome.id, s.genome.parent_id.into_iter().collect())),
                 ) {
                     progress(format!(
-                        "  [gen {gen}] discovered {} ({}) persistence={:.1}% noise-tol={:.1}%",
+                        "  [gen {gen}] discovered {} ({}) persistence={:.1}% noise-tol={:.1}%{}",
                         prim.id,
                         prim.class,
                         prim.persistence * 100.0,
-                        prim.noise_tolerance * 100.0
+                        prim.noise_tolerance * 100.0,
+                        survival
+                            .map(|sv| format!(" survival={:.0}%", sv * 100.0))
+                            .unwrap_or_default()
                     ));
                     registered_by_genome
                         .entry(s.genome.id)
@@ -371,6 +433,34 @@ mod tests {
                 "classification metadata missing"
             );
         }
+    }
+
+    #[test]
+    fn robust_mode_runs_and_is_a_distinct_protocol() {
+        let base = EvolutionConfig {
+            material_id: "metamaterial".into(),
+            generations: 1,
+            population: 3,
+            field_size: 48,
+            seed: 11,
+            ..Default::default()
+        };
+        let robust = EvolutionConfig {
+            robust_seeds: 2,
+            robust_noise_levels: vec![0.02],
+            ..base.clone()
+        };
+        let mut r1 = Registry::default();
+        let rep1 = evolve(&base, &mut r1, |_| {});
+        let mut r2 = Registry::default();
+        let rep2 = evolve(&robust, &mut r2, |_| {});
+        // The ensemble ran: robust evaluates strictly more simulations.
+        assert!(rep2.evaluated > rep1.evaluated);
+        // Robust config is part of the generating protocol, not a footnote.
+        assert_ne!(
+            rep1.manifest.experiment_hash(),
+            rep2.manifest.experiment_hash()
+        );
     }
 
     #[test]
