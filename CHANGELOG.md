@@ -2,6 +2,30 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.5.0 — 2026-08-01
+
+PRD "Version 0.5": distributed swarm exploration. Version number jumps to
+match the PRD milestone.
+
+### Added
+- **Swarm-aware explorers** — `explore` now merges primitives announced by
+  other nodes into its local registry before every search round, so novelty
+  detection is swarm-wide and agents stop rediscovering each other's work.
+  `--material` accepts a comma-separated rotation list or `all`.
+- **Archivist agent** — `kannaka-crystal archive` merges every discovery on
+  `kannaka.crystal.primitive.discovered` into this node's registry. Run it
+  against the Observatory's data dir and the registry grows live.
+- **Cross-node merge semantics** — swarm identity is the UUID; imports get
+  a fresh local CRY serial with the origin node + id recorded in
+  provenance; near-duplicate structures are rejected like local
+  registrations (ADR-0002).
+- **Searchable registry** (PRD: "every primitive becomes searchable") —
+  CLI: `primitives --class --material --min-persistence --similar CRY-#`;
+  API: `GET /primitives?class=&material=&min_persistence=&similar_to=`.
+- **Live Observatory registry** — the server reloads the registry file on
+  every read and load-modify-saves on writes, so swarm discoveries appear
+  in the UI as they land.
+
 ## v0.1.1 — 2026-08-01
 
 Completes the last PRD v0.1 deliverable and hardens the medium after

@@ -78,13 +78,10 @@ fn route(state: &AppState, method: &Method, url: &str, body: &str) -> (u16, Stri
         (Method::Get, "/") | (Method::Get, "/observatory") => (200, OBSERVATORY_HTML.to_string()),
         (Method::Get, "/crystal/state") => get_state(state),
         (Method::Get, "/materials") => (200, serde_json::to_string(&builtin_materials()).unwrap()),
-        (Method::Get, "/primitives") => {
-            let reg = state.registry.lock().unwrap();
-            (200, serde_json::to_string(&reg.primitives).unwrap())
-        }
+        (Method::Get, "/primitives") => get_primitives(url),
         (Method::Get, p) if p.starts_with("/primitives/") => {
             let id = p.trim_start_matches("/primitives/");
-            let reg = state.registry.lock().unwrap();
+            let reg = fresh_registry();
             match reg.find(id) {
                 Some(prim) => (200, serde_json::to_string(prim).unwrap()),
                 None => (404, error_json(&format!("unknown primitive: {id}"))),
@@ -106,13 +103,54 @@ fn error_json(msg: &str) -> String {
     json!({ "error": msg }).to_string()
 }
 
+/// The registry file is shared with swarm agents (archivist, explorers), so
+/// every read reloads from disk — the Observatory sees swarm discoveries
+/// live — and the server's own writers go load-modify-save under the mutex.
+fn fresh_registry() -> Registry {
+    Registry::load().unwrap_or_default()
+}
+
+fn query_param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
+    url.split_once('?')?
+        .1
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v)
+}
+
+/// GET /primitives?class=&material=&min_persistence=&similar_to=
+fn get_primitives(url: &str) -> (u16, String) {
+    let reg = fresh_registry();
+    if let Some(anchor_id) = query_param(url, "similar_to") {
+        let Some(anchor) = reg.find(anchor_id) else {
+            return (404, error_json(&format!("unknown primitive: {anchor_id}")));
+        };
+        let ranked: Vec<serde_json::Value> = reg
+            .similar(&anchor.signature, 25)
+            .into_iter()
+            .map(|(score, p)| json!({ "similarity": score, "primitive": p }))
+            .collect();
+        return (200, serde_json::to_string(&ranked).unwrap());
+    }
+    let min_persistence = query_param(url, "min_persistence")
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let hits = reg.search(
+        query_param(url, "class"),
+        query_param(url, "material"),
+        min_persistence,
+    );
+    (200, serde_json::to_string(&hits).unwrap())
+}
+
 fn parse<T: for<'de> Deserialize<'de>>(body: &str) -> Result<T, (u16, String)> {
     serde_json::from_str(body).map_err(|e| (400, error_json(&format!("bad request: {e}"))))
 }
 
 fn get_state(state: &AppState) -> (u16, String) {
     let engine = state.engine.lock().unwrap();
-    let reg = state.registry.lock().unwrap();
+    let reg = fresh_registry();
     let payload = json!({
         "material": engine.material,
         "temperature_k": engine.temperature_k,
@@ -290,7 +328,11 @@ fn post_evolve(state: &AppState, body: &str) -> (u16, String) {
             error_json(&format!("unknown material: {}", cfg.material_id)),
         );
     }
+    // Load-modify-save under the mutex: the file may have grown via swarm
+    // agents since the last request, and stale in-memory state would
+    // clobber their merges.
     let mut registry = state.registry.lock().unwrap();
+    *registry = fresh_registry();
     let report = evolve(&cfg, &mut registry, |_| {});
     if let Err(e) = registry.save() {
         return (500, error_json(&format!("registry save failed: {e}")));
@@ -310,6 +352,7 @@ fn post_run(state: &AppState, body: &str) -> (u16, String) {
     };
     let mut engine = state.engine.lock().unwrap();
     let mut registry = state.registry.lock().unwrap();
+    *registry = fresh_registry();
     match run_program(&req.program, &mut engine, &mut registry) {
         Ok(report) => {
             if let Err(e) = registry.save() {

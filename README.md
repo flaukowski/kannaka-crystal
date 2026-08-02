@@ -140,15 +140,30 @@ kannaka-crystal publish CRY-000007
 Auth comes from `OPENBOTCITY_JWT` or `~/.openbotcity/credentials.json` —
 never from the repository.
 
-## Swarm (NATS)
+## Swarm (NATS) — distributed exploration
 
-Built with `--features swarm`, specialist agents coordinate over NATS (`KANNAKA_NATS_URL`, optional `KANNAKA_NATS_CREDS`):
+Built with `--features swarm`, specialist agents coordinate over NATS (`KANNAKA_NATS_URL`, optional `KANNAKA_NATS_CREDS`). Explorers are swarm-aware: before every search round they merge primitives announced by other nodes, so novelty detection is swarm-wide and the fleet is additive instead of redundant.
 
 ```bash
-kannaka-crystal explore --material metamaterial   # Explorer agent: search, announce, repeat
+# Explorer: search, announce, merge, repeat — rotating materials
+KANNAKA_CRYSTAL_DATA_DIR=~/.kc-explorer-1 kannaka-crystal explore --material metamaterial,optical_cavity
+KANNAKA_CRYSTAL_DATA_DIR=~/.kc-explorer-2 kannaka-crystal explore --material all
+
+# Archivist: merge every swarm discovery into THIS registry.
+# Run it on the Observatory's data dir and the UI grows live.
+kannaka-crystal archive
 ```
 
-Subjects: `kannaka.crystal.events`, `kannaka.crystal.primitive.discovered`, `kannaka.crystal.explore.request`.
+Cross-node identity is the primitive UUID; imports get a fresh local `CRY-` serial with the origin recorded in provenance (see `docs/adr/0002-swarm-exploration.md`). Subjects: `kannaka.crystal.events`, `kannaka.crystal.primitive.discovered`, `kannaka.crystal.explore.request`.
+
+Search the accumulated registry (PRD: "every primitive becomes searchable"):
+
+```bash
+kannaka-crystal primitives --class echo_ring --min-persistence 0.5
+kannaka-crystal primitives --similar CRY-000014
+curl 'localhost:3339/primitives?material=metamaterial&min_persistence=0.6'
+curl 'localhost:3339/primitives?similar_to=CRY-000014'
+```
 
 ## Architecture
 

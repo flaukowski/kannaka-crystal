@@ -63,20 +63,37 @@ enum Command {
     },
     /// List built-in materials
     Materials,
-    /// Inspect the primitive registry
+    /// Inspect and search the primitive registry
     Primitives {
         /// Show a single primitive by id (CRY-###### or UUID)
         id: Option<String>,
         /// Export the full registry as JSON to stdout
         #[arg(long)]
         export: bool,
+        /// Filter by class (e.g. standing_echo, "Echo Ring")
+        #[arg(long)]
+        class: Option<String>,
+        /// Filter by material id
+        #[arg(long)]
+        material: Option<String>,
+        /// Minimum persistence in [0,1]
+        #[arg(long, default_value_t = 0.0)]
+        min_persistence: f64,
+        /// Rank by structural similarity to a primitive id
+        #[arg(long)]
+        similar: Option<String>,
     },
     /// Run a NATS Explorer agent (requires --features swarm build)
     #[cfg(feature = "swarm")]
     Explore {
+        /// Comma-separated material ids to rotate through, or "all"
         #[arg(long, default_value = "ideal_resonator")]
         material: String,
     },
+    /// Run a NATS Archivist agent: merge all swarm discoveries into this
+    /// node's registry (requires --features swarm build)
+    #[cfg(feature = "swarm")]
+    Archive,
     /// Publish a primitive to the OpenClawCity gallery (requires --features publish build)
     #[cfg(feature = "publish")]
     Publish {
@@ -185,7 +202,14 @@ fn dispatch(command: Command) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Primitives { id, export } => {
+        Command::Primitives {
+            id,
+            export,
+            class,
+            material,
+            min_persistence,
+            similar,
+        } => {
             let registry = Registry::load().map_err(|e| e.to_string())?;
             if export {
                 println!("{}", serde_json::to_string_pretty(&registry).unwrap());
@@ -202,9 +226,9 @@ fn dispatch(command: Command) -> Result<(), String> {
                 println!("registry is empty — try: kannaka-crystal evolve");
                 return Ok(());
             }
-            for p in &registry.primitives {
+            let list_line = |p: &kannaka_crystal::registry::Primitive, prefix: &str| {
                 println!(
-                    "{}  {:<16} persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]",
+                    "{prefix}{}  {:<16} persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]",
                     p.id,
                     p.class.to_string(),
                     p.persistence * 100.0,
@@ -212,11 +236,42 @@ fn dispatch(command: Command) -> Result<(), String> {
                     p.material_id,
                     p.lineage.join(", ")
                 );
+            };
+            if let Some(anchor_id) = similar {
+                let anchor = registry
+                    .find(&anchor_id)
+                    .ok_or_else(|| format!("unknown primitive: {anchor_id}"))?;
+                for (score, p) in registry.similar(&anchor.signature, 10) {
+                    list_line(p, &format!("{score:.3}  "));
+                }
+                return Ok(());
             }
+            let hits = registry.search(class.as_deref(), material.as_deref(), min_persistence);
+            for p in &hits {
+                list_line(p, "");
+            }
+            println!(
+                "({} of {} primitives)",
+                hits.len(),
+                registry.primitives.len()
+            );
             Ok(())
         }
         #[cfg(feature = "swarm")]
-        Command::Explore { material } => kannaka_crystal::swarm::run_explorer(&material),
+        Command::Explore { material } => {
+            let materials: Vec<String> = if material == "all" {
+                builtin_materials().into_iter().map(|m| m.id).collect()
+            } else {
+                material.split(',').map(|s| s.trim().to_string()).collect()
+            };
+            for m in &materials {
+                kannaka_crystal::material::find_material(m)
+                    .ok_or_else(|| format!("unknown material: {m}"))?;
+            }
+            kannaka_crystal::swarm::run_explorer(&materials)
+        }
+        #[cfg(feature = "swarm")]
+        Command::Archive => kannaka_crystal::swarm::run_archivist(),
         #[cfg(feature = "publish")]
         Command::Publish { id } => {
             let registry = Registry::load().map_err(|e| e.to_string())?;

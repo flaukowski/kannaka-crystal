@@ -90,43 +90,82 @@ async fn announce_primitive(client: &async_nats::Client, prim: &Primitive) -> Re
     .await
 }
 
-/// Run an Explorer agent: subscribe to explore requests, run bounded
-/// evolutionary searches, announce discoveries. Blocks forever.
-pub fn run_explorer(material_id: &str) -> Result<(), String> {
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    runtime.block_on(run_explorer_async(material_id))
+/// Drain pending discovery announcements from other nodes and merge them
+/// into the local registry, so this node's novelty search is swarm-wide
+/// (PRD v0.5: thousands of agents must not rediscover each other's work).
+async fn merge_inbound(
+    sub: &mut async_nats::Subscriber,
+    registry: &mut Registry,
+    self_node: &str,
+) -> usize {
+    let mut merged = 0usize;
+    while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_millis(50), sub.next()).await {
+        let Ok(event) = serde_json::from_slice::<CrystalEvent>(&msg.payload) else {
+            continue;
+        };
+        if event.node == self_node {
+            continue;
+        }
+        let Ok(prim) = serde_json::from_value::<Primitive>(event.payload) else {
+            continue;
+        };
+        if let Some(local_id) = registry.merge_remote(&prim, &event.node) {
+            println!("  merged {} from {} as {local_id}", prim.id, event.node);
+            merged += 1;
+        }
+    }
+    merged
 }
 
-async fn run_explorer_async(material_id: &str) -> Result<(), String> {
+/// Run an Explorer agent: merge swarm discoveries, serve explicit explore
+/// requests, otherwise self-schedule searches rotating through `materials`
+/// with fresh seeds. Blocks forever.
+pub fn run_explorer(materials: &[String]) -> Result<(), String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    runtime.block_on(run_explorer_async(materials))
+}
+
+async fn run_explorer_async(materials: &[String]) -> Result<(), String> {
     let client = connect().await?;
     let node = node_name();
-    println!("explorer {node} online — material {material_id}, subject {SUBJECT_EXPLORE}");
+    println!("explorer {node} online — materials {materials:?}, subject {SUBJECT_EXPLORE}");
     publish_event(
         &client,
         "explorer.online",
-        serde_json::json!({ "material": material_id }),
+        serde_json::json!({ "materials": materials }),
     )
     .await?;
 
-    let mut sub = client
+    let mut requests = client
         .subscribe(SUBJECT_EXPLORE)
         .await
         .map_err(|e| e.to_string())?;
+    let mut discoveries = client
+        .subscribe(SUBJECT_DISCOVERED)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    // Also self-schedule: explore continuously with rotating seeds even when
-    // nobody is publishing requests.
     let mut seed: u64 = rand::random();
+    let mut round = 0usize;
     loop {
-        // Drain any explicit request first (bounded wait so the self-driven
-        // loop keeps moving when the subject is quiet).
-        let requested = match tokio::time::timeout(Duration::from_millis(250), sub.next()).await {
-            Ok(Some(msg)) => serde_json::from_slice::<EvolutionConfig>(&msg.payload).ok(),
-            _ => None,
-        };
+        // Swarm sync first: what others found is not novel here anymore.
+        let mut registry = Registry::load().map_err(|e| e.to_string())?;
+        if merge_inbound(&mut discoveries, &mut registry, &node).await > 0 {
+            registry.save().map_err(|e| e.to_string())?;
+        }
+
+        // Explicit request beats self-scheduling (bounded wait keeps the
+        // self-driven loop moving when the subject is quiet).
+        let requested =
+            match tokio::time::timeout(Duration::from_millis(250), requests.next()).await {
+                Ok(Some(msg)) => serde_json::from_slice::<EvolutionConfig>(&msg.payload).ok(),
+                _ => None,
+            };
         let cfg = requested.unwrap_or_else(|| {
             seed = seed.wrapping_add(1);
+            round += 1;
             EvolutionConfig {
-                material_id: material_id.to_string(),
+                material_id: materials[round % materials.len()].clone(),
                 generations: 3,
                 population: 8,
                 seed,
@@ -135,6 +174,48 @@ async fn run_explorer_async(material_id: &str) -> Result<(), String> {
         });
         explore_once(&client, &cfg).await?;
     }
+}
+
+/// Run an Archivist agent: merge every discovery announced on the swarm
+/// into this node's registry. Point it at the data dir the Observatory
+/// serves and the registry grows live as explorers work. Blocks forever.
+pub fn run_archivist() -> Result<(), String> {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let client = connect().await?;
+        let node = node_name();
+        println!("archivist {node} online — merging {SUBJECT_DISCOVERED}");
+        publish_event(&client, "archivist.online", serde_json::json!({})).await?;
+
+        let mut discoveries = client
+            .subscribe(SUBJECT_DISCOVERED)
+            .await
+            .map_err(|e| e.to_string())?;
+        loop {
+            let Some(msg) = discoveries.next().await else {
+                return Err("discovery subscription closed".to_string());
+            };
+            let Ok(event) = serde_json::from_slice::<CrystalEvent>(&msg.payload) else {
+                continue;
+            };
+            let Ok(prim) = serde_json::from_value::<Primitive>(event.payload.clone()) else {
+                continue;
+            };
+            // Load-merge-save per event: the registry file is shared with
+            // the Observatory server, which also reloads per request.
+            let mut registry = Registry::load().map_err(|e| e.to_string())?;
+            if let Some(local_id) = registry.merge_remote(&prim, &event.node) {
+                registry.save().map_err(|e| e.to_string())?;
+                println!(
+                    "archived {local_id} <- {}@{} ({}, persistence {:.1}%)",
+                    prim.id,
+                    event.node,
+                    prim.class,
+                    prim.persistence * 100.0
+                );
+            }
+        }
+    })
 }
 
 async fn explore_once(client: &async_nats::Client, cfg: &EvolutionConfig) -> Result<(), String> {

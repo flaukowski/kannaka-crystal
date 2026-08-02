@@ -140,6 +140,53 @@ impl Registry {
             .find(|p| p.id == id || p.uuid.to_string() == id)
     }
 
+    /// Merge a primitive announced by another swarm node (PRD v0.5).
+    ///
+    /// Identity across the swarm is the UUID (and near-duplicate structure
+    /// is rejected exactly like local registration). Serial CRY ids are
+    /// per-node, so the import gets a fresh local serial; the origin node's
+    /// id is preserved in provenance. Lineage strings may reference serials
+    /// that only resolve on the origin node — they are kept verbatim as a
+    /// genealogical record, not a local foreign key.
+    pub fn merge_remote(&mut self, remote: &Primitive, origin_node: &str) -> Option<String> {
+        if self.primitives.iter().any(|p| p.uuid == remote.uuid) {
+            return None;
+        }
+        let duplicate = self.primitives.iter().any(|p| {
+            p.class == remote.class && signature_similarity(&p.signature, &remote.signature) >= 0.92
+        });
+        if duplicate {
+            return None;
+        }
+        self.next_serial += 1;
+        let mut prim = remote.clone();
+        prim.id = format!("CRY-{:06}", self.next_serial);
+        prim.provenance = format!("swarm:{origin_node}:{} | {}", remote.id, remote.provenance);
+        let id = prim.id.clone();
+        self.primitives.push(prim);
+        Some(id)
+    }
+
+    /// Search the registry (PRD v0.5: "every primitive becomes searchable").
+    /// `class` matches the display name case-insensitively with `_`/`-`
+    /// treated as spaces (`standing_echo` == "Standing Echo").
+    pub fn search(
+        &self,
+        class: Option<&str>,
+        material: Option<&str>,
+        min_persistence: f64,
+    ) -> Vec<&Primitive> {
+        let normalize = |s: &str| s.to_lowercase().replace(['_', '-'], " ");
+        self.primitives
+            .iter()
+            .filter(|p| {
+                class.is_none_or(|c| normalize(&p.class.to_string()) == normalize(c))
+                    && material.is_none_or(|m| p.material_id == m)
+                    && p.persistence >= min_persistence
+            })
+            .collect()
+    }
+
     /// Similarity search: top-k most similar primitives to a signature.
     pub fn similar(&self, signature: &[f64], top_k: usize) -> Vec<(f64, &Primitive)> {
         let mut scored: Vec<(f64, &Primitive)> = self
@@ -224,6 +271,78 @@ mod tests {
         assert_eq!(loaded.primitives[0].material_id, "vacuum");
         std::env::remove_var("KANNAKA_CRYSTAL_DATA_DIR");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn merge_remote_imports_once_and_reserials() {
+        let mut local = Registry::default();
+        let mut origin = Registry::default();
+        let remote = origin
+            .register(
+                &fake_structure(0.13),
+                0.9,
+                0.8,
+                vec![],
+                "silicon",
+                vec![],
+                "evolve gen 1",
+            )
+            .unwrap();
+
+        let merged_id = local
+            .merge_remote(&remote, "crystal-abc123")
+            .expect("first merge");
+        assert_eq!(merged_id, "CRY-000001", "local serial, not origin's");
+        let merged = local.find(&merged_id).unwrap();
+        assert_eq!(merged.uuid, remote.uuid, "swarm identity is the uuid");
+        assert!(merged
+            .provenance
+            .contains("swarm:crystal-abc123:CRY-000001"));
+
+        // Re-announcement is idempotent; near-duplicate structure rejected.
+        assert!(local.merge_remote(&remote, "crystal-abc123").is_none());
+        let near_dup = origin.register(
+            &fake_structure(0.13001),
+            0.9,
+            0.8,
+            vec![],
+            "silicon",
+            vec![],
+            "t",
+        );
+        if let Some(nd) = near_dup {
+            assert!(local.merge_remote(&nd, "crystal-def456").is_none());
+        }
+    }
+
+    #[test]
+    fn search_filters_class_material_persistence() {
+        let mut r = Registry::default();
+        r.register(
+            &fake_structure(0.13),
+            0.9,
+            0.8,
+            vec![],
+            "silicon",
+            vec![],
+            "t",
+        );
+        r.register(
+            &fake_structure(0.77),
+            0.3,
+            0.4,
+            vec![],
+            "vacuum",
+            vec![],
+            "t",
+        );
+        assert_eq!(r.search(Some("standing_echo"), None, 0.0).len(), 2);
+        assert_eq!(
+            r.search(Some("Standing Echo"), Some("silicon"), 0.0).len(),
+            1
+        );
+        assert_eq!(r.search(None, None, 0.5).len(), 1);
+        assert_eq!(r.search(Some("echo ring"), None, 0.0).len(), 0);
     }
 
     #[test]
