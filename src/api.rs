@@ -165,10 +165,14 @@ fn get_primitives(url: &str) -> (u16, String) {
     let min_persistence = query_param(url, "min_persistence")
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(0.0);
+    let min_evidence = query_param(url, "min_evidence")
+        .and_then(|v| v.parse::<u8>().ok())
+        .unwrap_or(0);
     let hits = reg.search(
         query_param(url, "class"),
         query_param(url, "material"),
         min_persistence,
+        min_evidence,
     );
     (200, serde_json::to_string(&hits).unwrap())
 }

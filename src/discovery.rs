@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Genome {
+    /// Stable genome identity (ADR-0004 §7) — genealogy is genome
+    /// parentage, never discovery order.
+    pub id: uuid::Uuid,
+    /// The genome this one was mutated from, if any.
+    pub parent_id: Option<uuid::Uuid>,
     pub pulses: Vec<Pulse>,
     /// Steps of free evolution before scoring.
     pub resonate_steps: u64,
@@ -29,6 +34,8 @@ impl Genome {
     fn random(rng: &mut ChaCha8Rng) -> Self {
         let n = rng.gen_range(1..=4);
         Genome {
+            id: uuid::Uuid::new_v4(),
+            parent_id: None,
             pulses: (0..n).map(|_| random_pulse(rng)).collect(),
             resonate_steps: rng.gen_range(100..600),
             dream_first: rng.gen_bool(0.5),
@@ -37,6 +44,8 @@ impl Genome {
 
     fn mutate(&self, rng: &mut ChaCha8Rng) -> Self {
         let mut g = self.clone();
+        g.parent_id = Some(self.id);
+        g.id = uuid::Uuid::new_v4();
         match rng.gen_range(0..5) {
             0 if g.pulses.len() > 1 => {
                 let i = rng.gen_range(0..g.pulses.len());
@@ -89,6 +98,11 @@ pub struct EvolutionConfig {
     pub seed: u64,
     /// Extra noise injected during the noise-tolerance re-run.
     pub noise_probe_amp: f64,
+    /// Ambient noise during the MAIN run — 0 in normal discovery; the
+    /// perturbation-stability procedure (ADR-0004 §8/§9 Level 3) re-runs
+    /// protocols with this raised.
+    #[serde(default)]
+    pub ambient_noise: f64,
 }
 
 impl Default for EvolutionConfig {
@@ -100,6 +114,7 @@ impl Default for EvolutionConfig {
             field_size: 96,
             seed: 0,
             noise_probe_amp: 0.02,
+            ambient_noise: 0.0,
         }
     }
 }
@@ -198,10 +213,16 @@ pub fn evolve(
     let mut discovered = Vec::new();
     let mut evaluated = 0usize;
     let mut best_fitness = 0.0f64;
+    // ADR-0004 §7: lineage is GENOME descent — a primitive's parents are
+    // primitives registered from its genome's parent, never whatever
+    // happened to be discovered just before it.
+    let mut registered_by_genome: std::collections::HashMap<uuid::Uuid, Vec<String>> =
+        Default::default();
 
     for gen in 0..cfg.generations {
         for s in population.iter_mut() {
-            let (persistence, structures, energy_profile) = evaluate(&s.genome, cfg, 0.0);
+            let (persistence, structures, energy_profile) =
+                evaluate(&s.genome, cfg, cfg.ambient_noise);
             evaluated += 1;
 
             // Novelty: best structure's distance from the registry.
@@ -225,12 +246,11 @@ pub fn evolve(
                 } else {
                     0.0
                 };
-                let lineage: Vec<String> = discovered
-                    .iter()
-                    .rev()
-                    .take(1)
-                    .map(|p: &Primitive| p.id.clone())
-                    .collect();
+                let lineage: Vec<String> = s
+                    .genome
+                    .parent_id
+                    .and_then(|pid| registered_by_genome.get(&pid).cloned())
+                    .unwrap_or_default();
                 if let Some(prim) = registry.register(
                     st,
                     persistence,
@@ -240,6 +260,7 @@ pub fn evolve(
                     lineage,
                     &format!("evolve gen {gen}"),
                     Some(experiment.clone()),
+                    Some((s.genome.id, s.genome.parent_id.into_iter().collect())),
                 ) {
                     progress(format!(
                         "  [gen {gen}] discovered {} ({}) persistence={:.1}% noise-tol={:.1}%",
@@ -248,6 +269,10 @@ pub fn evolve(
                         prim.persistence * 100.0,
                         prim.noise_tolerance * 100.0
                     ));
+                    registered_by_genome
+                        .entry(s.genome.id)
+                        .or_default()
+                        .push(prim.id.clone());
                     discovered.push(prim);
                 }
             }

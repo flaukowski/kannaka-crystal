@@ -198,6 +198,7 @@ pub fn run_program(
                         vec![],
                         "stabilize",
                         Some(experiment.clone()),
+                        None,
                     ) {
                         registered.push(p.id);
                     }
@@ -291,6 +292,7 @@ fn merge_primitives(
             vec![pa.id.clone(), pb.id.clone()],
             "merge",
             Some(experiment.clone()),
+            None,
         ) {
             child_id = Some(p.id);
         }

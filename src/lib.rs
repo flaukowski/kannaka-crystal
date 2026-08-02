@@ -36,6 +36,8 @@ pub mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod discovery;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod evidence;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lang;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod manifest;
@@ -48,3 +50,8 @@ pub mod swarm;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
+
+/// Serializes tests that set `KANNAKA_CRYSTAL_DATA_DIR` — the process
+/// environment is shared across parallel test threads.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

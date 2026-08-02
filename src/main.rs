@@ -79,9 +79,24 @@ enum Command {
         /// Minimum persistence in [0,1]
         #[arg(long, default_value_t = 0.0)]
         min_persistence: f64,
+        /// Minimum evidence ladder level 0-8 (ADR-0004 §9)
+        #[arg(long, default_value_t = 0)]
+        min_evidence: u8,
         /// Rank by structural similarity to a primitive id
         #[arg(long)]
         similar: Option<String>,
+    },
+    /// Promote a primitive up the evidence ladder through a recorded
+    /// procedure (ADR-0004 §9): replicate (L2), perturb (L3), resolution (L4)
+    Promote {
+        /// Primitive id (CRY-###### or UUID)
+        id: String,
+        /// replicate | perturb | resolution
+        #[arg(long, default_value = "replicate")]
+        procedure: String,
+        /// Seeds for the perturbation ensemble (§8 standard: 8)
+        #[arg(long, default_value_t = 8)]
+        seeds: u64,
     },
     /// Run the KCB-1 benchmark suite: physical-recall benchmarks across
     /// non-resonant baselines and mechanism ablations (ADR-0004 §10)
@@ -241,12 +256,51 @@ fn dispatch(command: Command) -> Result<(), String> {
             }
             Ok(())
         }
+        Command::Promote {
+            id,
+            procedure,
+            seeds,
+        } => {
+            let mut registry = Registry::load().map_err(|e| e.to_string())?;
+            let record = match procedure.as_str() {
+                "replicate" => kannaka_crystal::evidence::reproduce(&mut registry, &id)?,
+                "perturb" => {
+                    kannaka_crystal::evidence::perturbation(&mut registry, &id, seeds, |l| {
+                        eprintln!("{l}")
+                    })?
+                }
+                "resolution" => kannaka_crystal::evidence::cross_resolution(&mut registry, &id)?,
+                other => {
+                    return Err(format!(
+                        "unknown procedure: {other} (replicate|perturb|resolution)"
+                    ))
+                }
+            };
+            registry.save().map_err(|e| e.to_string())?;
+            let prim = registry
+                .find(&id)
+                .ok_or("primitive vanished mid-promotion")?;
+            println!(
+                "{} -> evidence level {} after {} ({})",
+                prim.id,
+                prim.evidence_level,
+                record.procedure,
+                if record.metrics["success"] == true {
+                    "success"
+                } else {
+                    "FAILED — recorded"
+                }
+            );
+            println!("{}", serde_json::to_string_pretty(&record.metrics).unwrap());
+            Ok(())
+        }
         Command::Primitives {
             id,
             export,
             class,
             material,
             min_persistence,
+            min_evidence,
             similar,
         } => {
             let registry = Registry::load().map_err(|e| e.to_string())?;
@@ -267,9 +321,10 @@ fn dispatch(command: Command) -> Result<(), String> {
             }
             let list_line = |p: &kannaka_crystal::registry::Primitive, prefix: &str| {
                 println!(
-                    "{prefix}{}  {:<16} persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]",
+                    "{prefix}{}  {:<16} L{}  persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]",
                     p.id,
                     p.class.to_string(),
+                    p.evidence_level,
                     p.persistence * 100.0,
                     p.noise_tolerance * 100.0,
                     p.material_id,
@@ -285,7 +340,12 @@ fn dispatch(command: Command) -> Result<(), String> {
                 }
                 return Ok(());
             }
-            let hits = registry.search(class.as_deref(), material.as_deref(), min_persistence);
+            let hits = registry.search(
+                class.as_deref(),
+                material.as_deref(),
+                min_persistence,
+                min_evidence,
+            );
             for p in &hits {
                 list_line(p, "");
             }

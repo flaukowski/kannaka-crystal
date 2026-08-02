@@ -2,6 +2,32 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.10.0 — 2026-08-02
+
+ADR-0004 Phase 3 (Robustness and Evidence): the evidence ladder lands on
+disk, promotion is a recorded procedure, and genealogy becomes actual
+ancestry.
+
+### Added
+- **Evidence ladder** (§9): every primitive carries `evidence_level`
+  (registration = Level 1 Observed; pre-ladder rows default to 1) and
+  `evidence_records` — the procedures behind the level. Search gains
+  `--min-evidence` / `min_evidence=` (CLI + API): the hook KannakaHDL's
+  evidence-floor queries resolve through.
+- **Promotion procedures** (`kannaka-crystal promote <id> --procedure …`):
+  `replicate` re-runs the exact manifest protocol (Level 2; a FAILED
+  replication demotes to Level 1 — negative results are recorded, not
+  discarded); `perturb` runs the §8 trial ensemble (shifted seeds ×
+  4 noise amplitudes; survival ≥60% → Level 3, and the ensemble survival
+  rate replaces the registration-time single-rerun noise_tolerance);
+  `resolution` re-runs at 0.75× and 1.5× grid (Level 4).
+- **Honest genealogy** (§7): genomes carry stable ids + parentage;
+  a primitive's lineage is now primitives registered from its genome's
+  parent — the discovery-adjacency pseudo-lineage is gone. Primitives
+  record `genome_id` + `parent_genome_ids`.
+- `EvolutionConfig.ambient_noise` — perturbation re-runs raise it;
+  normal discovery keeps 0.
+
 ## v0.9.0 — 2026-08-02
 
 ADR-0004 Phase 2 (Recall and Benchmark Separation): recall channels

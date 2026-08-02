@@ -125,6 +125,10 @@ mod tests {
             experiment_id: None,
             experiment_hash: None,
             classification: None,
+            evidence_level: 1,
+            evidence_records: vec![],
+            genome_id: None,
+            parent_genome_ids: vec![],
         }
     }
 

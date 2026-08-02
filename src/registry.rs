@@ -46,6 +46,39 @@ pub struct Primitive {
     /// confidence, raw morphology features). `None` on pre-metadata rows.
     #[serde(default)]
     pub classification: Option<crate::primitives::Classification>,
+    /// ADR-0004 §9 evidence ladder level (0 Generated … 8 Hardware
+    /// Observed). Registration = Level 1 (Observed); promotion only
+    /// through recorded procedures. Pre-ladder rows default to 1.
+    #[serde(default = "default_evidence_level")]
+    pub evidence_level: u8,
+    /// The recorded procedures behind the level — the level is a summary
+    /// of these records, and demotion is possible if one fails replication.
+    #[serde(default)]
+    pub evidence_records: Vec<EvidenceRecord>,
+    /// ADR-0004 §7: the genome that produced this primitive (evolve runs).
+    #[serde(default)]
+    pub genome_id: Option<Uuid>,
+    /// That genome's parents — genealogy as actual ancestry.
+    #[serde(default)]
+    pub parent_genome_ids: Vec<Uuid>,
+}
+
+fn default_evidence_level() -> u8 {
+    1
+}
+
+/// One recorded evidence procedure (ADR-0004 §9): what was run, what it
+/// measured, when, and where.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceRecord {
+    /// The ladder level this record supports.
+    pub level: u8,
+    /// e.g. "reproduce-v1", "perturbation-ensemble-v1", "cross-resolution-v1".
+    pub procedure: String,
+    /// Procedure-specific metrics (similarities, survival rates, profiles).
+    pub metrics: serde_json::Value,
+    pub at: DateTime<Utc>,
+    pub node: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -135,6 +168,7 @@ impl Registry {
         lineage: Vec<String>,
         provenance: &str,
         experiment: Option<(Uuid, String)>,
+        genome: Option<(Uuid, Vec<Uuid>)>,
     ) -> Option<Primitive> {
         let duplicate = self.primitives.iter().any(|p| {
             p.class == s.class && signature_similarity(&p.signature, &s.signature) >= 0.92
@@ -167,6 +201,11 @@ impl Registry {
             experiment_id,
             experiment_hash,
             classification: Some(s.classification.clone()),
+            // Level 1 Observed: passed the detector + registration gates.
+            evidence_level: 1,
+            evidence_records: Vec::new(),
+            genome_id: genome.as_ref().map(|(id, _)| *id),
+            parent_genome_ids: genome.map(|(_, parents)| parents).unwrap_or_default(),
         };
         self.primitives.push(prim.clone());
         Some(prim)
@@ -175,6 +214,12 @@ impl Registry {
     pub fn find(&self, id: &str) -> Option<&Primitive> {
         self.primitives
             .iter()
+            .find(|p| p.id == id || p.uuid.to_string() == id)
+    }
+
+    pub fn find_mut(&mut self, id: &str) -> Option<&mut Primitive> {
+        self.primitives
+            .iter_mut()
             .find(|p| p.id == id || p.uuid.to_string() == id)
     }
 
@@ -208,11 +253,14 @@ impl Registry {
     /// Search the registry (PRD v0.5: "every primitive becomes searchable").
     /// `class` matches the display name case-insensitively with `_`/`-`
     /// treated as spaces (`standing_echo` == "Standing Echo").
+    /// `min_evidence` filters by ADR-0004 §9 ladder level — the hook
+    /// KannakaHDL's evidence-floor queries resolve through.
     pub fn search(
         &self,
         class: Option<&str>,
         material: Option<&str>,
         min_persistence: f64,
+        min_evidence: u8,
     ) -> Vec<&Primitive> {
         let normalize = |s: &str| s.to_lowercase().replace(['_', '-'], " ");
         self.primitives
@@ -221,6 +269,7 @@ impl Registry {
                 class.is_none_or(|c| normalize(&p.class.to_string()) == normalize(c))
                     && material.is_none_or(|m| p.material_id == m)
                     && p.persistence >= min_persistence
+                    && p.evidence_level >= min_evidence
             })
             .collect()
     }
@@ -334,6 +383,7 @@ mod tests {
                 vec![],
                 "test",
                 experiment.clone(),
+                None,
             )
             .expect("first registration");
         assert_eq!(p1.id, "CRY-000001");
@@ -346,7 +396,7 @@ mod tests {
 
         // Exact duplicate is rejected.
         assert!(r
-            .register(&s1, 0.9, 0.8, vec![], "silicon", vec![], "test", None)
+            .register(&s1, 0.9, 0.8, vec![], "silicon", vec![], "test", None, None)
             .is_none());
 
         // A different structure registers with the next serial.
@@ -360,6 +410,7 @@ mod tests {
                 vec![],
                 "test",
                 None,
+                None,
             )
             .expect("second registration");
         assert_eq!(p2.id, "CRY-000002");
@@ -368,6 +419,7 @@ mod tests {
 
     #[test]
     fn roundtrip_persistence() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("kc-test-{}", std::process::id()));
         std::env::set_var("KANNAKA_CRYSTAL_DATA_DIR", &dir);
         let mut r = Registry::default();
@@ -379,6 +431,7 @@ mod tests {
             "vacuum",
             vec![],
             "rt",
+            None,
             None,
         );
         r.save().unwrap();
@@ -403,6 +456,7 @@ mod tests {
                 "silicon",
                 vec![],
                 "t",
+                None,
                 None,
             );
         }
@@ -441,6 +495,7 @@ mod tests {
                 vec![],
                 "evolve gen 1",
                 None,
+                None,
             )
             .unwrap();
 
@@ -465,6 +520,7 @@ mod tests {
             vec![],
             "t",
             None,
+            None,
         );
         if let Some(nd) = near_dup {
             assert!(local.merge_remote(&nd, "crystal-def456").is_none());
@@ -483,6 +539,7 @@ mod tests {
             vec![],
             "t",
             None,
+            None,
         );
         r.register(
             &fake_structure(0.77),
@@ -493,14 +550,16 @@ mod tests {
             vec![],
             "t",
             None,
+            None,
         );
-        assert_eq!(r.search(Some("standing_echo"), None, 0.0).len(), 2);
+        assert_eq!(r.search(Some("standing_echo"), None, 0.0, 0).len(), 2);
         assert_eq!(
-            r.search(Some("Standing Echo"), Some("silicon"), 0.0).len(),
+            r.search(Some("Standing Echo"), Some("silicon"), 0.0, 0)
+                .len(),
             1
         );
-        assert_eq!(r.search(None, None, 0.5).len(), 1);
-        assert_eq!(r.search(Some("echo ring"), None, 0.0).len(), 0);
+        assert_eq!(r.search(None, None, 0.5, 0).len(), 1);
+        assert_eq!(r.search(Some("echo ring"), None, 0.0, 0).len(), 0);
     }
 
     #[test]
@@ -508,8 +567,8 @@ mod tests {
         let mut r = Registry::default();
         let a = fake_structure(0.13);
         let b = fake_structure(0.99);
-        r.register(&a, 0.9, 0.8, vec![], "silicon", vec![], "t", None);
-        r.register(&b, 0.9, 0.8, vec![], "silicon", vec![], "t", None);
+        r.register(&a, 0.9, 0.8, vec![], "silicon", vec![], "t", None, None);
+        r.register(&b, 0.9, 0.8, vec![], "silicon", vec![], "t", None, None);
         let hits = r.similar(&a.signature, 2);
         assert!(hits[0].0 > 0.999);
     }
