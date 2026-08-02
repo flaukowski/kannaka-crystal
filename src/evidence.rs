@@ -19,17 +19,24 @@
 //! machinery that does not exist yet; these procedures do not pretend to
 //! reach them.
 
-use crate::discovery::{evolve, EvolutionConfig};
+use crate::discovery::{evolve, replay_genome, EvolutionConfig, Genome};
 use crate::engine::CrystalEngine;
 use crate::lang::run_program;
 use crate::manifest::ExperimentManifest;
 use crate::primitives::signature_similarity;
 use crate::registry::{data_dir, EvidenceRecord, Primitive, Registry};
 use chrono::Utc;
+use std::collections::HashMap;
 
-pub const REPRODUCE_PROCEDURE: &str = "reproduce-v1";
-pub const PERTURBATION_PROCEDURE: &str = "perturbation-ensemble-v1";
-pub const RESOLUTION_PROCEDURE: &str = "cross-resolution-v1";
+// v2: evolve-manifest procedures replay the primitive's recorded GENOME —
+// a closed protocol — instead of the full evolutionary search, whose
+// fitness couples to live registry state (novelty term) and therefore
+// diverges once the run's own discoveries have landed. Manifests without
+// genome records (pre-4.1) fall back to full-evolution replay; the
+// record's `method` field says which ran.
+pub const REPRODUCE_PROCEDURE: &str = "reproduce-v2";
+pub const PERTURBATION_PROCEDURE: &str = "perturbation-ensemble-v2";
+pub const RESOLUTION_PROCEDURE: &str = "cross-resolution-v2";
 
 const REPRODUCE_SIMILARITY: f64 = 0.92;
 const CROSS_RES_SIMILARITY: f64 = 0.85;
@@ -37,7 +44,12 @@ const SURVIVAL_THRESHOLD: f64 = 0.6;
 pub const PERTURBATION_NOISE_LEVELS: [f64; 4] = [0.005, 0.01, 0.02, 0.05];
 
 enum Protocol {
-    Evolve(EvolutionConfig),
+    Evolve {
+        cfg: EvolutionConfig,
+        /// Genome records from the manifest's results (Phase 4.1), keyed
+        /// by genome id — empty on pre-4.1 manifests.
+        genomes: HashMap<String, Genome>,
+    },
     Program {
         source: String,
         material_id: String,
@@ -64,7 +76,9 @@ fn load_protocol(prim: &Primitive) -> Result<Protocol, String> {
         Some("evolve") => {
             let cfg: EvolutionConfig = serde_json::from_value(manifest.program["config"].clone())
                 .map_err(|e| format!("manifest evolve config: {e}"))?;
-            Ok(Protocol::Evolve(cfg))
+            let genomes: HashMap<String, Genome> =
+                serde_json::from_value(manifest.results["genomes"].clone()).unwrap_or_default();
+            Ok(Protocol::Evolve { cfg, genomes })
         }
         Some("crystal-program") => Ok(Protocol::Program {
             source: manifest.program["source"]
@@ -80,24 +94,58 @@ fn load_protocol(prim: &Primitive) -> Result<Protocol, String> {
     }
 }
 
-/// Re-run a protocol into a throwaway registry, optionally perturbed.
-/// Returns the best signature similarity to `prim` among structures the
-/// re-run registered (and whether the best match shares the class).
+/// Re-run a protocol, optionally perturbed. Returns the best signature
+/// similarity to `prim` among structures the re-run produced, whether
+/// the best match shares the class, and which method ran
+/// ("genome-replay" — closed — or "full-rerun" — pre-4.1 fallback).
 fn rerun(
     protocol: &Protocol,
     prim: &Primitive,
     seed_shift: u64,
     noise: f64,
     size_scale: f64,
-) -> Result<(f64, bool), String> {
-    let mut throwaway = Registry::default();
+) -> Result<(f64, bool, &'static str), String> {
+    let compare = |structures: &[(Vec<f64>, crate::primitives::PrimitiveClass)]| {
+        structures
+            .iter()
+            .map(|(sig, class)| {
+                (
+                    signature_similarity(sig, &prim.signature),
+                    *class == prim.class,
+                )
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .unwrap_or((0.0, false))
+    };
     match protocol {
-        Protocol::Evolve(cfg) => {
+        Protocol::Evolve { cfg, genomes } => {
             let mut cfg = cfg.clone();
             cfg.seed = cfg.seed.wrapping_add(seed_shift);
             cfg.ambient_noise = noise;
             cfg.field_size = ((cfg.field_size as f64 * size_scale) as usize).max(32);
-            evolve(&cfg, &mut throwaway, |_| {});
+            let recorded = prim.genome_id.and_then(|gid| genomes.get(&gid.to_string()));
+            if let Some(genome) = recorded {
+                // Closed protocol: replay the generating simulation.
+                let (_, structures, _) = replay_genome(genome, &cfg);
+                let pairs: Vec<_> = structures
+                    .iter()
+                    .map(|st| (st.signature.clone(), st.class))
+                    .collect();
+                let (sim, class_match) = compare(&pairs);
+                Ok((sim, class_match, "genome-replay"))
+            } else {
+                // Pre-4.1 manifest: full-search replay (registry-coupled;
+                // expected to diverge if the registry has since grown).
+                let mut throwaway = Registry::default();
+                evolve(&cfg, &mut throwaway, |_| {});
+                let pairs: Vec<_> = throwaway
+                    .primitives
+                    .iter()
+                    .map(|p| (p.signature.clone(), p.class))
+                    .collect();
+                let (sim, class_match) = compare(&pairs);
+                Ok((sim, class_match, "full-rerun"))
+            }
         }
         Protocol::Program {
             source,
@@ -107,21 +155,17 @@ fn rerun(
             let size = ((*field_size as f64 * size_scale) as usize).max(32);
             let mut engine = CrystalEngine::new(material_id, size, seed_shift)?;
             engine.noise_amp = noise;
+            let mut throwaway = Registry::default();
             run_program(source, &mut engine, &mut throwaway).map_err(|e| e.to_string())?;
+            let pairs: Vec<_> = throwaway
+                .primitives
+                .iter()
+                .map(|p| (p.signature.clone(), p.class))
+                .collect();
+            let (sim, class_match) = compare(&pairs);
+            Ok((sim, class_match, "full-rerun"))
         }
     }
-    let best = throwaway
-        .primitives
-        .iter()
-        .map(|p| {
-            (
-                signature_similarity(&p.signature, &prim.signature),
-                p.class == prim.class,
-            )
-        })
-        .max_by(|a, b| a.0.total_cmp(&b.0))
-        .unwrap_or((0.0, false));
-    Ok(best)
 }
 
 fn node_name() -> String {
@@ -159,7 +203,7 @@ pub fn reproduce(registry: &mut Registry, id: &str) -> Result<EvidenceRecord, St
         .ok_or_else(|| format!("unknown primitive: {id}"))?
         .clone();
     let protocol = load_protocol(&prim)?;
-    let (similarity, class_match) = rerun(&protocol, &prim, 0, 0.0, 1.0)?;
+    let (similarity, class_match, method) = rerun(&protocol, &prim, 0, 0.0, 1.0)?;
     let success = similarity >= REPRODUCE_SIMILARITY && class_match;
     let record = EvidenceRecord {
         level: 2,
@@ -169,6 +213,7 @@ pub fn reproduce(registry: &mut Registry, id: &str) -> Result<EvidenceRecord, St
             "similarity": similarity,
             "class_match": class_match,
             "threshold": REPRODUCE_SIMILARITY,
+            "method": method,
         }),
         at: Utc::now(),
         node: node_name(),
@@ -196,9 +241,11 @@ pub fn perturbation(
     let mut similarities = Vec::new();
     let mut survivals = 0usize;
     let total = seeds as usize * PERTURBATION_NOISE_LEVELS.len();
+    let mut method = "genome-replay";
     for s in 0..seeds {
         for noise in PERTURBATION_NOISE_LEVELS {
-            let (similarity, class_match) = rerun(&protocol, &prim, 1000 + s, noise, 1.0)?;
+            let (similarity, class_match, m) = rerun(&protocol, &prim, 1000 + s, noise, 1.0)?;
+            method = m;
             let survived = similarity >= REPRODUCE_SIMILARITY && class_match;
             if survived {
                 survivals += 1;
@@ -233,6 +280,7 @@ pub fn perturbation(
             "seeds": seeds,
             "noise_levels": PERTURBATION_NOISE_LEVELS,
             "threshold": SURVIVAL_THRESHOLD,
+            "method": method,
         }),
         at: Utc::now(),
         node: node_name(),
@@ -257,8 +305,10 @@ pub fn cross_resolution(registry: &mut Registry, id: &str) -> Result<EvidenceRec
         .clone();
     let protocol = load_protocol(&prim)?;
     let mut sims = Vec::new();
+    let mut method = "genome-replay";
     for scale in [0.75, 1.5] {
-        let (similarity, _) = rerun(&protocol, &prim, 0, 0.0, scale)?;
+        let (similarity, _, m) = rerun(&protocol, &prim, 0, 0.0, scale)?;
+        method = m;
         sims.push((scale, similarity));
     }
     let success = sims.iter().all(|(_, s)| *s >= CROSS_RES_SIMILARITY);
@@ -269,6 +319,7 @@ pub fn cross_resolution(registry: &mut Registry, id: &str) -> Result<EvidenceRec
             "success": success,
             "similarities": sims.iter().map(|(sc, s)| serde_json::json!({"scale": sc, "similarity": s})).collect::<Vec<_>>(),
             "threshold": CROSS_RES_SIMILARITY,
+            "method": method,
         }),
         at: Utc::now(),
         node: node_name(),
@@ -326,6 +377,36 @@ mod tests {
         let prim = registry.find(&id).unwrap();
         assert_eq!(prim.evidence_level, 2, "replication promotes");
         assert_eq!(prim.evidence_records.len(), 1);
+        std::env::remove_var("KANNAKA_CRYSTAL_DATA_DIR");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reproduce_is_closed_under_registry_growth() {
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let (dir, mut registry, id) = setup();
+        // Grow the registry with a second, different run. Full-evolution
+        // replay diverges here (novelty is computed vs the live registry —
+        // the exact failure observed on CRY-012627: similarity 0.861 after
+        // its own run's 48 discoveries landed). Genome replay must not.
+        let cfg2 = EvolutionConfig {
+            material_id: "metamaterial".into(),
+            generations: 1,
+            population: 3,
+            field_size: 48,
+            seed: 99,
+            ..Default::default()
+        };
+        let report2 = evolve(&cfg2, &mut registry, |_| {});
+        report2.manifest.save().unwrap();
+        let record = reproduce(&mut registry, &id).unwrap();
+        assert_eq!(record.metrics["method"], "genome-replay");
+        assert_eq!(
+            record.metrics["success"], true,
+            "genome replay is registry-independent: {}",
+            record.metrics
+        );
+        assert_eq!(registry.find(&id).unwrap().evidence_level, 2);
         std::env::remove_var("KANNAKA_CRYSTAL_DATA_DIR");
         let _ = std::fs::remove_dir_all(dir);
     }

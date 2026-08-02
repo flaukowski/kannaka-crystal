@@ -1,6 +1,6 @@
 [package]
 name = "kannaka-crystal"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 description = "Kannaka Crystal — an experimental platform for informational materials and resonant memory systems"
 license = "MIT"

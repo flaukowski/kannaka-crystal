@@ -136,6 +136,18 @@ struct Scored {
     fitness: f64,
 }
 
+/// Replay a genome's generating simulation exactly as `evolve` evaluated
+/// it (ADR-0004 Phase 4.1). The genome + config fully determine the field
+/// evolution — no registry state involved — so this is the CLOSED
+/// protocol that evidence procedures replicate against. Ambient noise
+/// comes from `cfg.ambient_noise`.
+pub fn replay_genome(
+    genome: &Genome,
+    cfg: &EvolutionConfig,
+) -> (f64, Vec<crate::primitives::DetectedStructure>, Vec<f64>) {
+    evaluate(genome, cfg, cfg.ambient_noise)
+}
+
 /// Run one evaluation: inject genome, evolve, measure persistence + detect
 /// structures. Returns (persistence, noise_tolerance, structures, energy profile).
 fn evaluate(
@@ -218,6 +230,12 @@ pub fn evolve(
     // happened to be discovered just before it.
     let mut registered_by_genome: std::collections::HashMap<uuid::Uuid, Vec<String>> =
         Default::default();
+    // ADR-0004 Phase 4.1 manifest closure: record the genome behind every
+    // registered primitive so replication can replay the generating
+    // simulation directly. Full-evolution replay is NOT closed — fitness
+    // includes novelty vs the live registry, so re-running a search after
+    // its own discoveries landed takes a different trajectory.
+    let mut genome_records: std::collections::HashMap<String, Genome> = Default::default();
 
     for gen in 0..cfg.generations {
         for s in population.iter_mut() {
@@ -273,6 +291,9 @@ pub fn evolve(
                         .entry(s.genome.id)
                         .or_default()
                         .push(prim.id.clone());
+                    genome_records
+                        .entry(s.genome.id.to_string())
+                        .or_insert_with(|| s.genome.clone());
                     discovered.push(prim);
                 }
             }
@@ -301,6 +322,8 @@ pub fn evolve(
         "evaluated": evaluated,
         "best_fitness": best_fitness,
         "discovered": discovered.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        // Keyed by genome id; evidence procedures replay these directly.
+        "genomes": genome_records,
     });
     EvolutionReport {
         generations_run: cfg.generations,

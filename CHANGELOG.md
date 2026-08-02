@@ -2,6 +2,28 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.12.0 — 2026-08-02
+
+ADR-0004 Phase 4.1 (manifest closure): evidence procedures replay a
+closed protocol. Found live: replicating CRY-012627 against its own
+manifest scored 0.861 (< 0.92) because evolve fitness includes novelty
+vs the LIVE registry — re-running a search after its own discoveries
+landed takes a different trajectory. Evolve manifests were not closed.
+
+### Changed
+- Evolve manifests now record the **genome** behind every registered
+  primitive (`results.genomes`, hash-exempt). `replicate`/`perturb`/
+  `resolution` replay the primitive's generating simulation directly —
+  genome + config fully determine the field evolution, no registry
+  state involved. Procedures bumped to `reproduce-v2` /
+  `perturbation-ensemble-v2` / `cross-resolution-v2`; records carry
+  `method: genome-replay | full-rerun`.
+- Pre-4.1 manifests (no genome records) fall back to full-evolution
+  replay, which remains registry-coupled and is expected to diverge —
+  the record says so instead of pretending.
+- Regression test pins the fix: reproduce succeeds after the registry
+  grows between runs.
+
 ## v0.11.0 — 2026-08-02
 
 ADR-0004 Phase 4 (Behavioral Primitives): capabilities are measured
