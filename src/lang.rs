@@ -104,6 +104,41 @@ pub fn run_program(
                 engine.noise_amp = parse_num(args, 0, line)?;
                 serde_json::json!({ "noise_amp": engine.noise_amp })
             }
+            "ABLATE" => {
+                // ADR-0004 §11: `ABLATE <mechanism> on|off` — programs are
+                // the protocol record, so ablations belong in the source.
+                let mechanism = arg(args, 0, line, "mechanism")?.to_lowercase();
+                let enabled = match arg(args, 1, line, "on|off")?.to_lowercase().as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(LangError::Parse {
+                            line,
+                            message: format!("expected on|off, got {other}"),
+                        })
+                    }
+                };
+                let a = &mut engine.ablation;
+                match mechanism.as_str() {
+                    "damping" => a.damping = enabled,
+                    "nonlinearity" => a.nonlinearity = enabled,
+                    "viscosity" => a.viscosity = enabled,
+                    "boundary_reflection" | "reflection" => a.boundary_reflection = enabled,
+                    "thermal_noise" => a.thermal_noise = enabled,
+                    "external_noise" => a.external_noise = enabled,
+                    "dream_pruning" | "pruning" => a.dream_pruning = enabled,
+                    "dream_amplification" | "amplification" => a.dream_amplification = enabled,
+                    "dream_mutation" | "mutation" => a.dream_mutation = enabled,
+                    "semantic_recall" => a.semantic_recall = enabled,
+                    other => {
+                        return Err(LangError::Parse {
+                            line,
+                            message: format!("unknown mechanism: {other}"),
+                        })
+                    }
+                }
+                serde_json::json!({ "mechanism": mechanism, "enabled": enabled })
+            }
             "WRITE" => {
                 let text = arg(args, 0, line, "text")?;
                 let importance: f64 = opt_num(args, 1).unwrap_or(1.0);
@@ -373,7 +408,7 @@ mod tests {
         let report = run_program(program, &mut engine, &mut registry).unwrap();
         assert_eq!(report.steps.len(), 9);
         let probe = report.steps.iter().find(|s| s.op == "PROBE").unwrap();
-        let resonance = probe.detail["resonance"].as_f64().unwrap();
+        let resonance = probe.detail["physical_resonance"].as_f64().unwrap();
         assert!(resonance > 0.0);
     }
 

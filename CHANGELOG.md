@@ -2,6 +2,42 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.9.0 — 2026-08-02
+
+ADR-0004 Phase 2 (Recall and Benchmark Separation): recall channels
+split, mechanisms ablatable, and KCB-1 measuring the platform against
+baselines built to beat it.
+
+### Added
+- **Recall evidence channels** (§3, breaking): `probe()` returns
+  `physical_resonance` + its envelope/phase components (field-state
+  correlation only); `recall()` returns per-hit physical / encoding /
+  semantic / hybrid scores with the hybrid weights versioned
+  (`hybrid-v1`: 0.45 physical + 0.15 encoding + 0.40 semantic). Ranking
+  uses hybrid; scientific claims use physical alone.
+- **Mechanism ablation** (§11): ten switches (damping, nonlinearity,
+  viscosity, boundary reflection, thermal/external noise, dream
+  pruning/amplification/mutation, semantic recall) on the engine, plus
+  the `ABLATE <mechanism> on|off` Crystal Language op so programs carry
+  their ablations as protocol.
+- **KCB-1 benchmark runner** (§10): `kannaka-crystal bench` — four
+  benchmarks (identity recall after delay, rejection of unrelated,
+  noise robustness, multi-memory capacity) × five conditions
+  (crystal-full, static-encoding, conv-smoothing, no-nonlinearity,
+  no-reflection), 10 seeds each, results persisted in the experiment
+  manifest. A CI test pins the load-bearing claim: crystal-full must
+  hold a positive identity margin after delay.
+
+### First honest baseline (ideal_resonator, 10 seeds, delay 300)
+Physical-recall-only results, as the ADR warned, are less impressive
+than the old blended scores: static-encoding beats crystal-full on
+delayed identity margin (+0.59 vs +0.05) and capacity (0.98 vs 0.65) —
+wave mixing erodes content addressing, quantified. Crystal-full's
+measured advantage is **distractor rejection** (+0.69, best of all
+conditions), and both nonlinearity and reflection ablations degrade it.
+Closing the identity-margin gap (dream scheduling, material choice,
+delay regimes) is now a measurable research goal instead of a vibe.
+
 ## v0.8.0 — 2026-08-02
 
 ADR-0004 Phase 1 (Provenance and Labels): the platform starts grading

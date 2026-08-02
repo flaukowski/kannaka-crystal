@@ -61,13 +61,34 @@ impl Field {
         material: &Material,
         temperature_k: f64,
         noise_amp: f64,
+        ablation: &crate::engine::Ablation,
         rng: &mut ChaCha8Rng,
     ) {
         let n = self.size;
         let c2 = material.wave_speed * material.wave_speed;
-        let damping = material.damping;
-        let nl = material.nonlinearity;
-        let thermal = material.thermal_noise(temperature_k) + noise_amp;
+        // ADR-0004 §11: each mechanism individually disableable, so
+        // experiments can attribute observed effects.
+        let damping = if ablation.damping {
+            material.damping
+        } else {
+            0.0
+        };
+        let nl = if ablation.nonlinearity {
+            material.nonlinearity
+        } else {
+            0.0
+        };
+        let thermal_part = if ablation.thermal_noise {
+            material.thermal_noise(temperature_k)
+        } else {
+            0.0
+        };
+        let noise_part = if ablation.external_noise {
+            noise_amp
+        } else {
+            0.0
+        };
+        let thermal = thermal_part + noise_part;
 
         // Kelvin–Voigt artificial viscosity: damps the laplacian of the
         // *velocity*. Grid-scale (near-Nyquist) modes have near-zero group
@@ -76,6 +97,7 @@ impl Field {
         // an absorbing medium appears lossless. Smooth waves see almost none
         // of it. A property of the discretization, not of any material.
         const VISCOSITY: f64 = 0.01;
+        let viscosity = if ablation.viscosity { VISCOSITY } else { 0.0 };
 
         let mut u_next = vec![0.0; n * n];
         for y in 1..n - 1 {
@@ -96,7 +118,7 @@ impl Field {
                 let sat = u * u * u / (1.0 + u * u);
                 let mut v =
                     2.0 * u - self.u_prev[i] + c2 * lap - damping * (u - self.u_prev[i]) - nl * sat
-                        + VISCOSITY * (lap - lap_prev);
+                        + viscosity * (lap - lap_prev);
                 if thermal > 0.0 {
                     v += rng.gen_range(-thermal..thermal);
                 }
@@ -109,7 +131,12 @@ impl Field {
             }
         }
         // Boundaries: reflected copy of the adjacent interior cell, scaled.
-        let r = material.boundary_reflect;
+        // Ablating boundary reflection turns the walls fully absorbing.
+        let r = if ablation.boundary_reflection {
+            material.boundary_reflect
+        } else {
+            0.0
+        };
         for x in 0..n {
             u_next[x] = u_next[n + x] * r;
             u_next[(n - 1) * n + x] = u_next[(n - 2) * n + x] * r;
@@ -247,7 +274,13 @@ mod tests {
         let mut rng = seeded_rng(1);
         f.inject_at(32, 32, 1.0);
         for _ in 0..10 {
-            f.step(&mat, 0.0, 0.0, &mut rng);
+            f.step(
+                &mat,
+                0.0,
+                0.0,
+                &crate::engine::Ablation::default(),
+                &mut rng,
+            );
         }
         // Energy must have spread beyond the injection point.
         let away = f.at(32 + 5, 32).abs() + f.at(32, 32 + 5).abs();
@@ -263,7 +296,13 @@ mod tests {
             let mut rng = seeded_rng(2);
             f.inject_at(32, 32, 1.0);
             for _ in 0..400 {
-                f.step(&mat, 0.0, 0.0, &mut rng);
+                f.step(
+                    &mat,
+                    0.0,
+                    0.0,
+                    &crate::engine::Ablation::default(),
+                    &mut rng,
+                );
             }
             f.energy()
         };
@@ -297,7 +336,13 @@ mod tests {
             f.inject_at(22 + i, 33, -40.0);
         }
         for _ in 0..2000 {
-            f.step(&mat, 293.0, 0.05, &mut rng);
+            f.step(
+                &mat,
+                293.0,
+                0.05,
+                &crate::engine::Ablation::default(),
+                &mut rng,
+            );
         }
         assert!(f.u.iter().all(|v| v.is_finite()), "field went NaN");
         assert!(f.energy().is_finite());
@@ -312,7 +357,13 @@ mod tests {
             f.inject_at(20 + i, 32, 2.0);
         }
         for _ in 0..1000 {
-            f.step(&mat, 293.0, 0.0, &mut rng);
+            f.step(
+                &mat,
+                293.0,
+                0.0,
+                &crate::engine::Ablation::default(),
+                &mut rng,
+            );
         }
         assert!(f.energy().is_finite(), "field blew up");
     }

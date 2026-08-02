@@ -14,13 +14,75 @@ pub struct WriteRecord {
     pub written_at_step: u64,
 }
 
+/// Physical-recall probe (ADR-0004 §3): field-state correlations only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeResult {
     pub text: String,
-    /// Correlation of the live field against a fresh encoding of `text`.
-    pub resonance: f64,
+    /// 0.6·envelope + 0.4·phase — the physical channel's headline number.
+    pub physical_resonance: f64,
+    pub envelope_correlation: f64,
+    pub phase_correlation: f64,
     pub field_energy: f64,
     pub step: u64,
+}
+
+/// One recall hit with every evidence channel preserved (ADR-0004 §3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallResult {
+    pub text: String,
+    pub physical_resonance: f64,
+    pub encoding_similarity: f64,
+    pub semantic_similarity: f64,
+    pub hybrid_score: f64,
+    pub hybrid_version: String,
+    pub step: u64,
+}
+
+/// Mechanism ablation flags (ADR-0004 §11): individually disable core
+/// mechanisms so experiments can determine which one is responsible for
+/// an observed effect. Everything defaults ON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ablation {
+    pub damping: bool,
+    pub nonlinearity: bool,
+    pub viscosity: bool,
+    pub boundary_reflection: bool,
+    pub thermal_noise: bool,
+    pub external_noise: bool,
+    pub dream_pruning: bool,
+    pub dream_amplification: bool,
+    pub dream_mutation: bool,
+    pub semantic_recall: bool,
+}
+
+impl Default for Ablation {
+    fn default() -> Self {
+        Ablation {
+            damping: true,
+            nonlinearity: true,
+            viscosity: true,
+            boundary_reflection: true,
+            thermal_noise: true,
+            external_noise: true,
+            dream_pruning: true,
+            dream_amplification: true,
+            dream_mutation: true,
+            semantic_recall: true,
+        }
+    }
+}
+
+/// Encoder-space cosine between two patterns — encoding recall, fully
+/// independent of field evolution.
+pub fn pattern_cosine(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let nb: f64 = b.iter().map(|y| y * y).sum::<f64>().sqrt();
+    if na < 1e-12 || nb < 1e-12 {
+        0.0
+    } else {
+        (dot / (na * nb)).abs()
+    }
 }
 
 pub struct CrystalEngine {
@@ -29,6 +91,8 @@ pub struct CrystalEngine {
     pub temperature_k: f64,
     /// Extra injected noise on top of thermal noise (experiment knob).
     pub noise_amp: f64,
+    /// ADR-0004 §11 mechanism switches, all on by default.
+    pub ablation: Ablation,
     pub writes: Vec<WriteRecord>,
     /// Energy sampled every `ENERGY_SAMPLE_EVERY` steps for the decay timeline.
     pub energy_timeline: Vec<(u64, f64)>,
@@ -47,6 +111,7 @@ impl CrystalEngine {
             material,
             temperature_k,
             noise_amp: 0.0,
+            ablation: Ablation::default(),
             writes: Vec::new(),
             energy_timeline: Vec::new(),
             rng: seeded_rng(seed),
@@ -79,6 +144,7 @@ impl CrystalEngine {
                 &self.material,
                 self.temperature_k,
                 self.noise_amp,
+                &self.ablation,
                 &mut self.rng,
             );
             if self.field.step_count.is_multiple_of(ENERGY_SAMPLE_EVERY) {
@@ -94,50 +160,72 @@ impl CrystalEngine {
 
     /// PROBE — how strongly does `text` still resonate in the field?
     ///
-    /// Blends envelope correlation (is the field's energy where this
-    /// pattern put it?) with phase correlation (is it still coherently
-    /// ringing the exact pattern?). Envelope dominates: phases evolve
-    /// long before a structure dies, and a phase-only probe against an
-    /// old field degenerates to chance.
+    /// PHYSICAL recall only (ADR-0004 §3): correlations between the live
+    /// medium state and the encoded target — no encoder-side or semantic
+    /// similarity leaks in. `physical_resonance` blends envelope
+    /// correlation (is the field's energy where this pattern put it?)
+    /// with phase correlation (is it still coherently ringing the exact
+    /// pattern?); both components are exposed.
     pub fn probe(&mut self, text: &str) -> ProbeResult {
         let pattern = encode_text(text, self.field.size);
         let envelope = self.field.correlate_envelope(&pattern);
         let phase = self.field.correlate(&pattern);
         ProbeResult {
             text: text.to_string(),
-            resonance: 0.6 * envelope + 0.4 * phase,
+            physical_resonance: 0.6 * envelope + 0.4 * phase,
+            envelope_correlation: envelope,
+            phase_correlation: phase,
             field_energy: self.field.energy(),
             step: self.field.step_count,
         }
     }
 
-    /// RECALL — probe every written record and rank by current resonance.
-    pub fn recall(&mut self, query: &str, top_k: usize) -> Vec<ProbeResult> {
-        // The query itself resonates: correlate the query encoding with each
-        // written text's encoding *through the live field* — a probe of the
-        // query plus probes of all writes, ranked by combined resonance.
-        let query_probe = self.probe(query);
-        let mut results: Vec<ProbeResult> = self
+    /// RECALL — rank written records against a query through distinct
+    /// evidence channels (ADR-0004 §3): physical (field vs candidate
+    /// pattern), encoding (encoder-space similarity of query vs candidate,
+    /// independent of field evolution), semantic (lexical overlap, outside
+    /// the field entirely), and a versioned hybrid used for ranking.
+    /// Scientific reports use `physical_resonance` alone; applications may
+    /// rank by hybrid, but every component is preserved.
+    ///
+    /// The `semantic_recall` ablation flag (§11) zeroes the semantic
+    /// channel's contribution to the hybrid.
+    pub fn recall(&mut self, query: &str, top_k: usize) -> Vec<RecallResult> {
+        let query_pattern = encode_text(query, self.field.size);
+        let semantic_enabled = self.ablation.semantic_recall;
+        let mut results: Vec<RecallResult> = self
             .writes
             .iter()
             .map(|w| w.text.clone())
             .collect::<Vec<_>>()
             .into_iter()
             .map(|text| {
-                let mut p = self.probe(&text);
-                // Lexical overlap gives a resonance boost — meaning rides on
-                // top of the raw wave correlation. The additive term matters:
-                // after heavy decay every raw correlation is chance-level
-                // (~0.05), and multiplying chance by overlap still loses to
-                // chance. Overlap must be able to outweigh noise on its own.
-                let overlap = word_overlap(query, &p.text);
-                p.resonance = p.resonance * (1.0 + 2.0 * overlap)
-                    + 0.3 * overlap
-                    + query_probe.resonance * 0.05;
-                p
+                let probe = self.probe(&text);
+                let candidate_pattern = encode_text(&text, self.field.size);
+                let encoding_similarity = pattern_cosine(&query_pattern, &candidate_pattern);
+                let semantic_similarity = word_overlap(query, &text);
+                let semantic_used = if semantic_enabled {
+                    semantic_similarity
+                } else {
+                    0.0
+                };
+                // hybrid-v1 (versions::RECALL_HYBRID_VERSION): weights are
+                // versioned constants, never silently retuned.
+                let hybrid_score = crate::versions::HYBRID_W_PHYSICAL * probe.physical_resonance
+                    + crate::versions::HYBRID_W_ENCODING * encoding_similarity
+                    + crate::versions::HYBRID_W_SEMANTIC * semantic_used;
+                RecallResult {
+                    text,
+                    physical_resonance: probe.physical_resonance,
+                    encoding_similarity,
+                    semantic_similarity,
+                    hybrid_score,
+                    hybrid_version: crate::versions::RECALL_HYBRID_VERSION.to_string(),
+                    step: probe.step,
+                }
             })
             .collect();
-        results.sort_by(|a, b| b.resonance.total_cmp(&a.resonance));
+        results.sort_by(|a, b| b.hybrid_score.total_cmp(&a.hybrid_score));
         results.truncate(top_k);
         results
     }
@@ -177,18 +265,18 @@ mod tests {
         e.write("the moon is a resonator", 1.0);
         let fresh = e.probe("the moon is a resonator");
         assert!(
-            fresh.resonance > 0.9,
+            fresh.physical_resonance > 0.9,
             "fresh write should ring: {}",
-            fresh.resonance
+            fresh.physical_resonance
         );
         e.resonate(200);
         let later = e.probe("the moon is a resonator");
         let other = e.probe("unrelated content entirely");
         assert!(
-            later.resonance > other.resonance,
+            later.physical_resonance > other.physical_resonance,
             "written text ({}) should outresonate unwritten ({})",
-            later.resonance,
-            other.resonance
+            later.physical_resonance,
+            other.physical_resonance
         );
     }
 

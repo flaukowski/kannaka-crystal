@@ -83,6 +83,20 @@ enum Command {
         #[arg(long)]
         similar: Option<String>,
     },
+    /// Run the KCB-1 benchmark suite: physical-recall benchmarks across
+    /// non-resonant baselines and mechanism ablations (ADR-0004 §10)
+    Bench {
+        #[arg(long, default_value = "ideal_resonator")]
+        material: String,
+        #[arg(long, default_value_t = 64)]
+        size: usize,
+        /// Seeds per condition (10-run standard for real comparisons)
+        #[arg(long, default_value_t = 10)]
+        seeds: u64,
+        /// Free-evolution steps between write and probe
+        #[arg(long, default_value_t = 300)]
+        delay: u64,
+    },
     /// Prune the registry to its growth caps (see KANNAKA_CRYSTAL_BUCKET_CAP
     /// / KANNAKA_CRYSTAL_MAX_PRIMITIVES)
     Prune {
@@ -206,7 +220,10 @@ fn dispatch(command: Command) -> Result<(), String> {
             );
             for text in &write {
                 let p = engine.probe(text);
-                println!("  after dream, \"{}\" resonance = {:.3}", text, p.resonance);
+                println!(
+                    "  after dream, \"{}\" resonance = {:.3}",
+                    text, p.physical_resonance
+                );
             }
             Ok(())
         }
@@ -276,6 +293,47 @@ fn dispatch(command: Command) -> Result<(), String> {
                 "({} of {} primitives)",
                 hits.len(),
                 registry.primitives.len()
+            );
+            Ok(())
+        }
+        Command::Bench {
+            material,
+            size,
+            seeds,
+            delay,
+        } => {
+            kannaka_crystal::material::find_material(&material)
+                .ok_or_else(|| format!("unknown material: {material}"))?;
+            let cfg = kannaka_crystal::bench::BenchConfig {
+                material_id: material,
+                field_size: size,
+                seeds,
+                delay,
+            };
+            let report = kannaka_crystal::bench::run_kcb1(&cfg, |line| eprintln!("{line}"));
+            // Table: benchmarks x conditions (mean ± std).
+            println!(
+                "\n{} — material {}, {} seeds, delay {}",
+                report.suite, cfg.material_id, cfg.seeds, cfg.delay
+            );
+            print!("{:<28}", "benchmark");
+            for c in &report.conditions {
+                print!("{c:>18}");
+            }
+            println!();
+            for row in &report.rows {
+                print!("{:<28}", row.benchmark);
+                for c in &report.conditions {
+                    let s = &row.results[c];
+                    print!("{:>18}", format!("{:+.3}±{:.3}", s.mean, s.std));
+                }
+                println!();
+            }
+            let path = report.manifest.save()?;
+            println!(
+                "\nexperiment {} -> {}",
+                report.manifest.experiment_id,
+                path.display()
             );
             Ok(())
         }

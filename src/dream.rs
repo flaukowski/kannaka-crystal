@@ -36,10 +36,23 @@ pub struct DreamReport {
 }
 
 pub fn dream(engine: &mut CrystalEngine, mode: DreamMode) -> DreamReport {
-    let (observe_steps, prune_percentile, prune_factor, amplify, mutation) = match mode {
+    let (observe_steps, prune_percentile, mut prune_factor, mut amplify, mut mutation) = match mode
+    {
         DreamMode::Light => (150u64, 0.35, 0.75, 1.05, 0.0),
         DreamMode::Deep => (600u64, 0.5, 0.65, 1.12, 0.01),
     };
+    // ADR-0004 §11 ablations: disabling a dream mechanism neutralizes its
+    // parameter rather than skipping the cycle, so "dreaming with pruning
+    // off" remains a well-defined experimental condition.
+    if !engine.ablation.dream_pruning {
+        prune_factor = 1.0;
+    }
+    if !engine.ablation.dream_amplification {
+        amplify = 1.0;
+    }
+    if !engine.ablation.dream_mutation {
+        mutation = 0.0;
+    }
 
     let energy_before = engine.field.energy();
     let n = engine.field.size;
@@ -146,8 +159,8 @@ mod tests {
         // Control resonates for the same total steps the dreamer consumed.
         control.resonate(report.observed_steps + 50);
 
-        let d = dreamer.probe("consolidate me").resonance;
-        let c = control.probe("consolidate me").resonance;
+        let d = dreamer.probe("consolidate me").physical_resonance;
+        let c = control.probe("consolidate me").physical_resonance;
         // Consolidation trades some raw phase correlation for structural
         // stability (prune + amplify perturb phases). The claim is that
         // dreaming must not *destroy* the memory — it keeps the majority

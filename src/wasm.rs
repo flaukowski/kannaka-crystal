@@ -52,9 +52,10 @@ impl CrystalWasm {
         self.engine.resonate(steps as u64);
     }
 
-    /// Resonance of `text` against the live field (0..~1).
+    /// PHYSICAL resonance of `text` against the live field (0..~1) —
+    /// field-state correlation only, no semantic channel (ADR-0004 §3).
     pub fn probe(&mut self, text: &str) -> f64 {
-        self.engine.probe(text).resonance
+        self.engine.probe(text).physical_resonance
     }
 
     /// Run a dream cycle; returns a small JSON report.

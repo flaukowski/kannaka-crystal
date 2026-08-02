@@ -26,3 +26,13 @@ pub const SIGNATURE_VERSION: &str = "signature-16x16-v1";
 
 /// persistence*0.7 + retention*0.3 with novelty bonus (discovery).
 pub const FITNESS_VERSION: &str = "fitness-v2";
+
+/// Hybrid recall combination (ADR-0004 §3). Weights are versioned —
+/// bump the version when retuning, never retune silently.
+pub const RECALL_HYBRID_VERSION: &str = "hybrid-v1";
+pub const HYBRID_W_PHYSICAL: f64 = 0.45;
+pub const HYBRID_W_ENCODING: f64 = 0.15;
+pub const HYBRID_W_SEMANTIC: f64 = 0.40;
+
+/// KCB benchmark suite version (ADR-0004 §10).
+pub const BENCHMARK_SUITE_VERSION: &str = "KCB-1";

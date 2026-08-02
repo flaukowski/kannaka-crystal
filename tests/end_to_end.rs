@@ -102,7 +102,7 @@ fn crystal_program_from_prd_runs() {
         .steps
         .iter()
         .filter(|s| s.op == "PROBE")
-        .map(|s| s.detail["resonance"].as_f64().unwrap())
+        .map(|s| s.detail["physical_resonance"].as_f64().unwrap())
         .collect();
     let (written, control) = (probes[0], probes[1]);
     assert!(written > 0.0, "written probe must resonate at all");
