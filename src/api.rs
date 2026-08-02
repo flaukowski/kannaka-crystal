@@ -173,6 +173,7 @@ fn get_primitives(url: &str) -> (u16, String) {
         query_param(url, "material"),
         min_persistence,
         min_evidence,
+        query_param(url, "capability"),
     );
     (200, serde_json::to_string(&hits).unwrap())
 }

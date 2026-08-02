@@ -32,6 +32,8 @@ pub mod versions;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod api;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod behavior;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bench;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod discovery;

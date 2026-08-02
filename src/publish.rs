@@ -129,6 +129,7 @@ mod tests {
             evidence_records: vec![],
             genome_id: None,
             parent_genome_ids: vec![],
+            behavioral_capabilities: vec![],
         }
     }
 

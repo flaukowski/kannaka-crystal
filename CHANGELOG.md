@@ -2,6 +2,32 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.11.0 — 2026-08-02
+
+ADR-0004 Phase 4 (Behavioral Primitives): capabilities are measured
+demonstrations, never morphological inferences.
+
+### Added
+- **Behavioral contracts** (`src/behavior.rs`, `behavior-contract-v1`):
+  every contract runs the same task WITH the primitive instantiated and
+  WITHOUT it, over N deterministic trials — the capability score is the
+  mean advantage, so a primitive that doesn't help scores ≈ 0. First two
+  contracts: `noise_shielding` (does the primitive's presence protect a
+  written memory's physical recall under ambient noise?) and
+  `pattern_completion` (given half a target's constellation as a cue,
+  does the field recover the full pattern better with the primitive?).
+- `kannaka-crystal promote <id> --procedure behavior --capability
+  noise_shielding|pattern_completion [--trials 10]` — records a
+  `BehavioralCapability` on the primitive (passed or failed — failed
+  tests are evidence too). A pass promotes to **Level 6 Behaviorally
+  Validated** only if the primitive is already Level ≥ 2 (Replicated):
+  a behavior demonstrated on an unreproducible structure demonstrates
+  nothing.
+- **Capability search**: CLI `primitives --capability <name>`, API
+  `GET /primitives?capability=<name>` — matches only PASSED capabilities.
+  This is the hook KannakaHDL `capability` queries resolve through.
+  Primitive listings show `caps=[…]` for passed capabilities.
+
 ## v0.10.0 — 2026-08-02
 
 ADR-0004 Phase 3 (Robustness and Evidence): the evidence ladder lands on

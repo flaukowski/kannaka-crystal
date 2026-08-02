@@ -61,6 +61,11 @@ pub struct Primitive {
     /// That genome's parents — genealogy as actual ancestry.
     #[serde(default)]
     pub parent_genome_ids: Vec<Uuid>,
+    /// ADR-0004 §5 behavioral ontology (Phase 4): measured capability
+    /// demonstrations. A capability is recorded whether it passed or not —
+    /// failed tests are evidence too. Absent on pre-Phase-4 rows.
+    #[serde(default)]
+    pub behavioral_capabilities: Vec<BehavioralCapability>,
 }
 
 fn default_evidence_level() -> u8 {
@@ -77,6 +82,26 @@ pub struct EvidenceRecord {
     pub procedure: String,
     /// Procedure-specific metrics (similarities, survival rates, profiles).
     pub metrics: serde_json::Value,
+    pub at: DateTime<Utc>,
+    pub node: String,
+}
+
+/// One measured behavioral capability (ADR-0004 Phase 4): the same task
+/// run with and without the primitive instantiated, over N trials.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehavioralCapability {
+    /// e.g. "noise_shielding", "pattern_completion".
+    pub name: String,
+    /// Contract version — bump when the trial protocol changes.
+    pub contract_version: String,
+    /// Whether the contract's pass criteria were met.
+    pub passed: bool,
+    /// Mean advantage of primitive-present over primitive-absent trials.
+    pub mean_advantage: f64,
+    pub std_advantage: f64,
+    /// Fraction of trials with positive advantage.
+    pub positive_fraction: f64,
+    pub trials: u64,
     pub at: DateTime<Utc>,
     pub node: String,
 }
@@ -206,6 +231,7 @@ impl Registry {
             evidence_records: Vec::new(),
             genome_id: genome.as_ref().map(|(id, _)| *id),
             parent_genome_ids: genome.map(|(_, parents)| parents).unwrap_or_default(),
+            behavioral_capabilities: vec![],
         };
         self.primitives.push(prim.clone());
         Some(prim)
@@ -254,13 +280,16 @@ impl Registry {
     /// `class` matches the display name case-insensitively with `_`/`-`
     /// treated as spaces (`standing_echo` == "Standing Echo").
     /// `min_evidence` filters by ADR-0004 §9 ladder level — the hook
-    /// KannakaHDL's evidence-floor queries resolve through.
+    /// KannakaHDL's evidence-floor queries resolve through. `capability`
+    /// requires a PASSED behavioral capability of that name (Phase 4) —
+    /// a recorded-but-failed test does not satisfy the query.
     pub fn search(
         &self,
         class: Option<&str>,
         material: Option<&str>,
         min_persistence: f64,
         min_evidence: u8,
+        capability: Option<&str>,
     ) -> Vec<&Primitive> {
         let normalize = |s: &str| s.to_lowercase().replace(['_', '-'], " ");
         self.primitives
@@ -270,6 +299,11 @@ impl Registry {
                     && material.is_none_or(|m| p.material_id == m)
                     && p.persistence >= min_persistence
                     && p.evidence_level >= min_evidence
+                    && capability.is_none_or(|cap| {
+                        p.behavioral_capabilities
+                            .iter()
+                            .any(|c| c.passed && normalize(&c.name) == normalize(cap))
+                    })
             })
             .collect()
     }
@@ -552,14 +586,14 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(r.search(Some("standing_echo"), None, 0.0, 0).len(), 2);
+        assert_eq!(r.search(Some("standing_echo"), None, 0.0, 0, None).len(), 2);
         assert_eq!(
-            r.search(Some("Standing Echo"), Some("silicon"), 0.0, 0)
+            r.search(Some("Standing Echo"), Some("silicon"), 0.0, 0, None)
                 .len(),
             1
         );
-        assert_eq!(r.search(None, None, 0.5, 0).len(), 1);
-        assert_eq!(r.search(Some("echo ring"), None, 0.0, 0).len(), 0);
+        assert_eq!(r.search(None, None, 0.5, 0, None).len(), 1);
+        assert_eq!(r.search(Some("echo ring"), None, 0.0, 0, None).len(), 0);
     }
 
     #[test]

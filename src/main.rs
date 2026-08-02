@@ -82,6 +82,10 @@ enum Command {
         /// Minimum evidence ladder level 0-8 (ADR-0004 §9)
         #[arg(long, default_value_t = 0)]
         min_evidence: u8,
+        /// Require a PASSED behavioral capability
+        /// (noise_shielding | pattern_completion)
+        #[arg(long)]
+        capability: Option<String>,
         /// Rank by structural similarity to a primitive id
         #[arg(long)]
         similar: Option<String>,
@@ -91,9 +95,16 @@ enum Command {
     Promote {
         /// Primitive id (CRY-###### or UUID)
         id: String,
-        /// replicate | perturb | resolution
+        /// replicate | perturb | resolution | behavior
         #[arg(long, default_value = "replicate")]
         procedure: String,
+        /// Behavioral contract to run when --procedure behavior
+        /// (noise_shielding | pattern_completion)
+        #[arg(long)]
+        capability: Option<String>,
+        /// Trials for the behavioral contract
+        #[arg(long, default_value_t = 10)]
+        trials: u64,
         /// Seeds for the perturbation ensemble (§8 standard: 8)
         #[arg(long, default_value_t = 8)]
         seeds: u64,
@@ -260,8 +271,41 @@ fn dispatch(command: Command) -> Result<(), String> {
             id,
             procedure,
             seeds,
+            capability,
+            trials,
         } => {
             let mut registry = Registry::load().map_err(|e| e.to_string())?;
+            if procedure == "behavior" {
+                let cap = capability.ok_or(
+                    "--procedure behavior needs --capability \
+                     (noise_shielding | pattern_completion)",
+                )?;
+                let record = kannaka_crystal::behavior::test_capability(
+                    &mut registry,
+                    &id,
+                    &cap,
+                    trials,
+                    |l| eprintln!("{l}"),
+                )?;
+                registry.save().map_err(|e| e.to_string())?;
+                let prim = registry.find(&id).unwrap();
+                println!(
+                    "{} {} {}: mean advantage {:+.4}±{:.4} ({:.0}% positive, {} trials) -> L{}",
+                    prim.id,
+                    record.name,
+                    if record.passed {
+                        "PASSED"
+                    } else {
+                        "FAILED — recorded"
+                    },
+                    record.mean_advantage,
+                    record.std_advantage,
+                    record.positive_fraction * 100.0,
+                    record.trials,
+                    prim.evidence_level,
+                );
+                return Ok(());
+            }
             let record = match procedure.as_str() {
                 "replicate" => kannaka_crystal::evidence::reproduce(&mut registry, &id)?,
                 "perturb" => {
@@ -272,7 +316,7 @@ fn dispatch(command: Command) -> Result<(), String> {
                 "resolution" => kannaka_crystal::evidence::cross_resolution(&mut registry, &id)?,
                 other => {
                     return Err(format!(
-                        "unknown procedure: {other} (replicate|perturb|resolution)"
+                        "unknown procedure: {other} (replicate|perturb|resolution|behavior)"
                     ))
                 }
             };
@@ -301,6 +345,7 @@ fn dispatch(command: Command) -> Result<(), String> {
             material,
             min_persistence,
             min_evidence,
+            capability,
             similar,
         } => {
             let registry = Registry::load().map_err(|e| e.to_string())?;
@@ -320,15 +365,26 @@ fn dispatch(command: Command) -> Result<(), String> {
                 return Ok(());
             }
             let list_line = |p: &kannaka_crystal::registry::Primitive, prefix: &str| {
+                let caps: Vec<&str> = p
+                    .behavioral_capabilities
+                    .iter()
+                    .filter(|c| c.passed)
+                    .map(|c| c.name.as_str())
+                    .collect();
                 println!(
-                    "{prefix}{}  {:<16} L{}  persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]",
+                    "{prefix}{}  {:<16} L{}  persistence={:>5.1}%  noise-tol={:>5.1}%  {}  lineage=[{}]{}",
                     p.id,
                     p.class.to_string(),
                     p.evidence_level,
                     p.persistence * 100.0,
                     p.noise_tolerance * 100.0,
                     p.material_id,
-                    p.lineage.join(", ")
+                    p.lineage.join(", "),
+                    if caps.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  caps=[{}]", caps.join(", "))
+                    }
                 );
             };
             if let Some(anchor_id) = similar {
@@ -345,6 +401,7 @@ fn dispatch(command: Command) -> Result<(), String> {
                 material.as_deref(),
                 min_persistence,
                 min_evidence,
+                capability.as_deref(),
             );
             for p in &hits {
                 list_line(p, "");
