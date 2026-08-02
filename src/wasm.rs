@@ -29,8 +29,23 @@ impl CrystalWasm {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn pulse(&mut self, x: f64, y: f64, radius: f64, amplitude: f64, frequency: f64, phase: f64) {
-        self.engine.pulse(&Pulse { x, y, radius, amplitude, frequency, phase });
+    pub fn pulse(
+        &mut self,
+        x: f64,
+        y: f64,
+        radius: f64,
+        amplitude: f64,
+        frequency: f64,
+        phase: f64,
+    ) {
+        self.engine.pulse(&Pulse {
+            x,
+            y,
+            radius,
+            amplitude,
+            frequency,
+            phase,
+        });
     }
 
     pub fn resonate(&mut self, steps: u32) {
@@ -44,7 +59,11 @@ impl CrystalWasm {
 
     /// Run a dream cycle; returns a small JSON report.
     pub fn dream(&mut self, deep: bool) -> String {
-        let mode = if deep { DreamMode::Deep } else { DreamMode::Light };
+        let mode = if deep {
+            DreamMode::Deep
+        } else {
+            DreamMode::Light
+        };
         let r = dream(&mut self.engine, mode);
         format!(
             "{{\"pruned_fraction\":{:.4},\"energy_before\":{:.3},\"energy_after\":{:.3}}}",
