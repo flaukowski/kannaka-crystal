@@ -2,6 +2,16 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.5.1 — 2026-08-01
+
+### Fixed
+- Swarm agents authenticate with `NATS_USER`/`NATS_PASSWORD` (the
+  constellation convention). The swarm server's anonymous user is a
+  read-only mirror with a curated subject allowlist that silently drops
+  everything else — v0.5.0 fleets could explore but never hear each
+  other. First verified live fleet: 3 explorers + archivist, full-mesh
+  cross-node merging, Observatory registry 38 → 250+ in minutes.
+
 ## v0.5.0 — 2026-08-01
 
 PRD "Version 0.5": distributed swarm exploration. Version number jumps to
