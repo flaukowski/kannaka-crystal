@@ -78,6 +78,7 @@ fn route(state: &AppState, method: &Method, url: &str, body: &str) -> (u16, Stri
         (Method::Get, "/") | (Method::Get, "/observatory") => (200, OBSERVATORY_HTML.to_string()),
         (Method::Get, "/crystal/state") => get_state(state),
         (Method::Get, "/materials") => (200, serde_json::to_string(&builtin_materials()).unwrap()),
+        (Method::Get, "/genealogy") => get_genealogy(),
         (Method::Get, "/primitives") => get_primitives(url),
         (Method::Get, p) if p.starts_with("/primitives/") => {
             let id = p.trim_start_matches("/primitives/");
@@ -117,6 +118,34 @@ fn query_param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
         .filter_map(|kv| kv.split_once('='))
         .find(|(k, _)| *k == key)
         .map(|(_, v)| v)
+}
+
+/// GET /genealogy — the lineage graph, lean: no 256-float signatures, so
+/// the Observatory's genealogy tab can poll it cheaply. Origin node is
+/// parsed out of swarm provenance (`swarm:<node>:<remote-id> | ...`).
+fn get_genealogy() -> (u16, String) {
+    let reg = fresh_registry();
+    let nodes: Vec<serde_json::Value> = reg
+        .primitives
+        .iter()
+        .map(|p| {
+            let origin = p
+                .provenance
+                .strip_prefix("swarm:")
+                .and_then(|rest| rest.split(':').next())
+                .unwrap_or("local");
+            json!({
+                "id": p.id,
+                "class": p.class.to_string(),
+                "persistence": p.persistence,
+                "material": p.material_id,
+                "lineage": p.lineage,
+                "origin": origin,
+                "at": p.discovered_at.timestamp_millis(),
+            })
+        })
+        .collect();
+    (200, serde_json::to_string(&nodes).unwrap())
 }
 
 /// GET /primitives?class=&material=&min_persistence=&similar_to=

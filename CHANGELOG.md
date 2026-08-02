@@ -2,6 +2,23 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.6.0 — 2026-08-02
+
+### Added
+- **Genealogy tab** in the Observatory (ADR-0003): a Morpho-inspired
+  growth replay of the registry — primitives appear in discovery order,
+  spawn beside their lineage parents, and a force layout untangles the
+  graph. Fill = class, ring = origin swarm node, radius = persistence;
+  live mode streams the running swarm's discoveries into the animation.
+  Zero dependencies (~200 lines of vanilla canvas JS), view capped at
+  500 nodes.
+- **`GET /genealogy`** — lean lineage projection (no signatures) with
+  origin node parsed from swarm provenance; cheap to poll.
+- **ADR-0003** (Proposed): a rewrite-rule composition language over
+  cataloged primitives as the H3 architecture layer — base cases are
+  registry queries, growth instantiates into a field. Blocked on the
+  "ports as resonance couplings" question; documented before syntax.
+
 ## v0.5.2 — 2026-08-01
 
 Growth management for long-running fleets (a 3-explorer fleet accumulates
