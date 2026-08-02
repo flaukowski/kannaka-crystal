@@ -44,9 +44,12 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Build
-        # `publish` (OpenClawCity artifact posting) ships in release binaries;
-        # only local dev builds default to the lean no-HTTP-client profile.
-        run: cargo build --release --target ${{ matrix.target }} --features publish --bin kannaka-crystal
+        # Release binaries ship full-fat: `publish` (OpenClawCity posting)
+        # AND `swarm` (NATS explore/archive) — Oracle-box fleet deployment
+        # installs straight from these release assets, so a lean release
+        # binary would make `explore` unavailable exactly where it's needed.
+        # Only local dev builds default to the lean profile.
+        run: cargo build --release --target ${{ matrix.target }} --features publish,swarm --bin kannaka-crystal
 
       - name: Rename artifact + emit SHA-256 sidecar
         shell: bash

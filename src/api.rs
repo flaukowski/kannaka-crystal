@@ -334,6 +334,8 @@ fn post_evolve(state: &AppState, body: &str) -> (u16, String) {
     let mut registry = state.registry.lock().unwrap();
     *registry = fresh_registry();
     let report = evolve(&cfg, &mut registry, |_| {});
+    let (bucket_cap, total_cap) = crate::registry::caps_from_env();
+    registry.prune(bucket_cap, total_cap);
     if let Err(e) = registry.save() {
         return (500, error_json(&format!("registry save failed: {e}")));
     }

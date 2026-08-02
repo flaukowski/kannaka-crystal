@@ -156,6 +156,8 @@ kannaka-crystal archive
 
 Cross-node identity is the primitive UUID; imports get a fresh local `CRY-` serial with the origin recorded in provenance (see `docs/adr/0002-swarm-exploration.md`). Subjects: `kannaka.crystal.events`, `kannaka.crystal.primitive.discovered`, `kannaka.crystal.explore.request`.
 
+**Growth management** — long-running fleets are bounded by quality-ranked pruning: `KANNAKA_CRYSTAL_BUCKET_CAP` (default 150 per class×material), `KANNAKA_CRYSTAL_MAX_PRIMITIVES` (default 5000 total), `KANNAKA_CRYSTAL_ANNOUNCE_MIN_PERSISTENCE` (default 0.25, quality floor for the bus). Pace explorers on shared boxes with `explore --interval 45`. Manual sweep: `kannaka-crystal prune`.
+
 Search the accumulated registry (PRD: "every primitive becomes searchable"):
 
 ```bash

@@ -15,10 +15,20 @@
 //! (ring 0.16, rustls-webpki 0.100/0.101) with open RUSTSEC advisories.
 
 use crate::discovery::{evolve, EvolutionConfig};
-use crate::registry::{Primitive, Registry};
+use crate::registry::{caps_from_env, Primitive, Registry};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+/// Minimum persistence a primitive needs before it is announced to the
+/// swarm (`KANNAKA_CRYSTAL_ANNOUNCE_MIN_PERSISTENCE`, default 0.25) —
+/// keeps low-quality junk off the bus entirely.
+fn announce_floor() -> f64 {
+    std::env::var("KANNAKA_CRYSTAL_ANNOUNCE_MIN_PERSISTENCE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.25)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrystalEvent {
@@ -129,12 +139,12 @@ async fn merge_inbound(
 /// Run an Explorer agent: merge swarm discoveries, serve explicit explore
 /// requests, otherwise self-schedule searches rotating through `materials`
 /// with fresh seeds. Blocks forever.
-pub fn run_explorer(materials: &[String]) -> Result<(), String> {
+pub fn run_explorer(materials: &[String], interval_secs: u64) -> Result<(), String> {
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    runtime.block_on(run_explorer_async(materials))
+    runtime.block_on(run_explorer_async(materials, interval_secs))
 }
 
-async fn run_explorer_async(materials: &[String]) -> Result<(), String> {
+async fn run_explorer_async(materials: &[String], interval_secs: u64) -> Result<(), String> {
     let client = connect().await?;
     let node = node_name();
     println!("explorer {node} online — materials {materials:?}, subject {SUBJECT_EXPLORE}");
@@ -154,13 +164,20 @@ async fn run_explorer_async(materials: &[String]) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
+    let (bucket_cap, total_cap) = caps_from_env();
     let mut seed: u64 = rand::random();
     let mut round = 0usize;
     loop {
         // Swarm sync first: what others found is not novel here anymore.
         let mut registry = Registry::load().map_err(|e| e.to_string())?;
         if merge_inbound(&mut discoveries, &mut registry, &node).await > 0 {
+            registry.prune(bucket_cap, total_cap);
             registry.save().map_err(|e| e.to_string())?;
+        }
+
+        // Pace the search: on shared boxes an explorer must not own the CPU.
+        if interval_secs > 0 {
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         }
 
         // Explicit request beats self-scheduling (bounded wait keeps the
@@ -212,15 +229,22 @@ pub fn run_archivist() -> Result<(), String> {
             };
             // Load-merge-save per event: the registry file is shared with
             // the Observatory server, which also reloads per request.
+            let (bucket_cap, total_cap) = caps_from_env();
             let mut registry = Registry::load().map_err(|e| e.to_string())?;
             if let Some(local_id) = registry.merge_remote(&prim, &event.node) {
+                let evicted = registry.prune(bucket_cap, total_cap);
                 registry.save().map_err(|e| e.to_string())?;
                 println!(
-                    "archived {local_id} <- {}@{} ({}, persistence {:.1}%)",
+                    "archived {local_id} <- {}@{} ({}, persistence {:.1}%){}",
                     prim.id,
                     event.node,
                     prim.class,
-                    prim.persistence * 100.0
+                    prim.persistence * 100.0,
+                    if evicted > 0 {
+                        format!(" [pruned {evicted}]")
+                    } else {
+                        String::new()
+                    }
                 );
             }
         }
@@ -228,14 +252,23 @@ pub fn run_archivist() -> Result<(), String> {
 }
 
 async fn explore_once(client: &async_nats::Client, cfg: &EvolutionConfig) -> Result<(), String> {
+    let (bucket_cap, total_cap) = caps_from_env();
+    let floor = announce_floor();
     let mut registry = Registry::load().map_err(|e| e.to_string())?;
-    let before = registry.primitives.len();
     // CPU-bound search; this explorer does one thing, so blocking the
     // runtime between NATS interactions is fine.
     let report = evolve(cfg, &mut registry, |line| println!("{line}"));
+    let evicted = registry.prune(bucket_cap, total_cap);
+    if evicted > 0 {
+        println!("  pruned {evicted} low-quality primitives (caps {bucket_cap}/{total_cap})");
+    }
     registry.save().map_err(|e| e.to_string())?;
-    for prim in &registry.primitives[before..] {
-        announce_primitive(client, prim).await?;
+    // Announce what this round discovered — if it survived pruning and
+    // clears the quality floor. The floor keeps junk off the bus.
+    for prim in &report.discovered {
+        if prim.persistence >= floor && registry.find(&prim.id).is_some() {
+            announce_primitive(client, prim).await?;
+        }
     }
     publish_event(
         client,

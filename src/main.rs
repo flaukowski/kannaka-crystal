@@ -83,12 +83,25 @@ enum Command {
         #[arg(long)]
         similar: Option<String>,
     },
+    /// Prune the registry to its growth caps (see KANNAKA_CRYSTAL_BUCKET_CAP
+    /// / KANNAKA_CRYSTAL_MAX_PRIMITIVES)
+    Prune {
+        /// Max primitives per class×material bucket (overrides env)
+        #[arg(long)]
+        bucket_cap: Option<usize>,
+        /// Max total primitives (overrides env)
+        #[arg(long)]
+        total_cap: Option<usize>,
+    },
     /// Run a NATS Explorer agent (requires --features swarm build)
     #[cfg(feature = "swarm")]
     Explore {
         /// Comma-separated material ids to rotate through, or "all"
         #[arg(long, default_value = "ideal_resonator")]
         material: String,
+        /// Seconds to sleep between search rounds (0 = flat out)
+        #[arg(long, default_value_t = 0)]
+        interval: u64,
     },
     /// Run a NATS Archivist agent: merge all swarm discoveries into this
     /// node's registry (requires --features swarm build)
@@ -257,8 +270,26 @@ fn dispatch(command: Command) -> Result<(), String> {
             );
             Ok(())
         }
+        Command::Prune {
+            bucket_cap,
+            total_cap,
+        } => {
+            let (env_bucket, env_total) = kannaka_crystal::registry::caps_from_env();
+            let mut registry = Registry::load().map_err(|e| e.to_string())?;
+            let before = registry.primitives.len();
+            let evicted = registry.prune(
+                bucket_cap.unwrap_or(env_bucket),
+                total_cap.unwrap_or(env_total),
+            );
+            registry.save().map_err(|e| e.to_string())?;
+            println!(
+                "pruned {evicted} of {before} primitives ({} remain)",
+                before - evicted
+            );
+            Ok(())
+        }
         #[cfg(feature = "swarm")]
-        Command::Explore { material } => {
+        Command::Explore { material, interval } => {
             let materials: Vec<String> = if material == "all" {
                 builtin_materials().into_iter().map(|m| m.id).collect()
             } else {
@@ -268,7 +299,7 @@ fn dispatch(command: Command) -> Result<(), String> {
                 kannaka_crystal::material::find_material(m)
                     .ok_or_else(|| format!("unknown material: {m}"))?;
             }
-            kannaka_crystal::swarm::run_explorer(&materials)
+            kannaka_crystal::swarm::run_explorer(&materials, interval)
         }
         #[cfg(feature = "swarm")]
         Command::Archive => kannaka_crystal::swarm::run_archivist(),

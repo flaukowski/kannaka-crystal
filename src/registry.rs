@@ -50,6 +50,22 @@ pub enum RegistryError {
     Serde(#[from] serde_json::Error),
 }
 
+/// Growth caps: (`bucket_cap`, `total_cap`), from
+/// `KANNAKA_CRYSTAL_BUCKET_CAP` (default 150 per class×material) and
+/// `KANNAKA_CRYSTAL_MAX_PRIMITIVES` (default 5000).
+pub fn caps_from_env() -> (usize, usize) {
+    let get = |key: &str, default: usize| {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    (
+        get("KANNAKA_CRYSTAL_BUCKET_CAP", 150),
+        get("KANNAKA_CRYSTAL_MAX_PRIMITIVES", 5000),
+    )
+}
+
 pub fn data_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("KANNAKA_CRYSTAL_DATA_DIR") {
         return PathBuf::from(dir);
@@ -187,6 +203,51 @@ impl Registry {
             .collect()
     }
 
+    /// Growth management (PRD: decay is information — it applies to the
+    /// catalog too). Two bounds, both env-tunable:
+    ///
+    /// - `bucket_cap`: max primitives per (class, material) bucket, so one
+    ///   prolific bucket (metamaterial Standing Echoes) can't squeeze out
+    ///   taxonomy diversity.
+    /// - `total_cap`: absolute registry size.
+    ///
+    /// Eviction order is lowest quality first, where quality is
+    /// persistence-weighted (0.7) with noise tolerance (0.3). Lineage
+    /// references may dangle after pruning — by ADR-0002 lineage is a
+    /// genealogical record, not a foreign key. Returns evicted count.
+    pub fn prune(&mut self, bucket_cap: usize, total_cap: usize) -> usize {
+        use std::collections::HashMap;
+        let quality = |p: &Primitive| p.persistence * 0.7 + p.noise_tolerance * 0.3;
+        let before = self.primitives.len();
+
+        // Per-bucket cap.
+        let mut buckets: HashMap<(String, String), Vec<(f64, Uuid)>> = HashMap::new();
+        for p in &self.primitives {
+            buckets
+                .entry((p.class.to_string(), p.material_id.clone()))
+                .or_default()
+                .push((quality(p), p.uuid));
+        }
+        let mut evict: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+        for members in buckets.values_mut() {
+            if members.len() > bucket_cap {
+                members.sort_by(|a, b| b.0.total_cmp(&a.0));
+                for (_, uuid) in members.iter().skip(bucket_cap) {
+                    evict.insert(*uuid);
+                }
+            }
+        }
+        self.primitives.retain(|p| !evict.contains(&p.uuid));
+
+        // Absolute cap.
+        if self.primitives.len() > total_cap {
+            self.primitives
+                .sort_by(|a, b| quality(b).total_cmp(&quality(a)));
+            self.primitives.truncate(total_cap);
+        }
+        before - self.primitives.len()
+    }
+
     /// Similarity search: top-k most similar primitives to a signature.
     pub fn similar(&self, signature: &[f64], top_k: usize) -> Vec<(f64, &Primitive)> {
         let mut scored: Vec<(f64, &Primitive)> = self
@@ -271,6 +332,43 @@ mod tests {
         assert_eq!(loaded.primitives[0].material_id, "vacuum");
         std::env::remove_var("KANNAKA_CRYSTAL_DATA_DIR");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prune_respects_bucket_and_total_caps_keeping_quality() {
+        let mut r = Registry::default();
+        for i in 0..30 {
+            let s = fake_structure(0.1 + i as f64 * 0.037);
+            // Rising persistence so the best are the later ones.
+            r.register(
+                &s,
+                0.2 + (i as f64) * 0.02,
+                0.5,
+                vec![],
+                "silicon",
+                vec![],
+                "t",
+            );
+        }
+        assert!(r.primitives.len() > 10, "need a populated registry");
+        let mut persistences: Vec<f64> = r.primitives.iter().map(|p| p.persistence).collect();
+        persistences.sort_by(|a, b| b.total_cmp(a));
+        let tenth_best = persistences[9];
+
+        let evicted = r.prune(10, 100);
+        assert_eq!(r.primitives.len(), 10, "bucket cap enforced");
+        assert!(evicted > 0);
+        assert!(
+            r.primitives
+                .iter()
+                .all(|p| p.persistence >= tenth_best - 1e-9),
+            "prune must keep highest quality"
+        );
+
+        // Absolute cap dominates.
+        let evicted2 = r.prune(10, 4);
+        assert_eq!(r.primitives.len(), 4);
+        assert_eq!(evicted2, 6);
     }
 
     #[test]

@@ -2,6 +2,28 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.5.2 — 2026-08-01
+
+Growth management for long-running fleets (a 3-explorer fleet accumulates
+~120 primitives per 10 minutes unbounded).
+
+### Added
+- **Registry pruning** — quality-ranked eviction with two env-tunable
+  bounds: `KANNAKA_CRYSTAL_BUCKET_CAP` (default 150 per class×material
+  bucket, preserving taxonomy diversity) and
+  `KANNAKA_CRYSTAL_MAX_PRIMITIVES` (default 5000 total). Applied
+  automatically by explorers, the archivist, and the evolve API;
+  manually via `kannaka-crystal prune`.
+- **Announce floor** — primitives below
+  `KANNAKA_CRYSTAL_ANNOUNCE_MIN_PERSISTENCE` (default 0.25) are kept
+  locally but never announced to the swarm bus.
+- **Explorer pacing** — `explore --interval <secs>` sleeps between search
+  rounds so explorers coexist politely on shared boxes.
+
+### Changed
+- Release binaries now build with `--features publish,swarm` so fleet
+  nodes install straight from release assets.
+
 ## v0.5.1 — 2026-08-01
 
 ### Fixed
