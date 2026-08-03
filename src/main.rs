@@ -57,6 +57,13 @@ enum Command {
         /// Seeds per noise level for the robust ensemble
         #[arg(long, default_value_t = 3)]
         robust_seeds: u64,
+        /// Capability-directed mode: select for a behavioral contract
+        /// (noise_shielding | pattern_completion)
+        #[arg(long)]
+        select_for: Option<String>,
+        /// In-loop trials per contract evaluation
+        #[arg(long, default_value_t = 3)]
+        capability_trials: u64,
     },
     /// Run a standalone dream (consolidation) experiment
     Dream {
@@ -205,13 +212,24 @@ fn dispatch(command: Command) -> Result<(), String> {
             seed,
             robust,
             robust_seeds,
+            select_for,
+            capability_trials,
         } => {
+            if let Some(cap) = &select_for {
+                if !kannaka_crystal::behavior::known_capability(cap) {
+                    return Err(format!(
+                        "unknown capability: {cap} (noise_shielding | pattern_completion)"
+                    ));
+                }
+            }
             let cfg = EvolutionConfig {
                 material_id: material,
                 generations,
                 population,
                 seed,
                 robust_seeds: if robust { robust_seeds } else { 0 },
+                select_capability: select_for,
+                capability_trials,
                 ..Default::default()
             };
             kannaka_crystal::material::find_material(&cfg.material_id)

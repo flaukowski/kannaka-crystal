@@ -24,7 +24,7 @@
 
 use crate::engine::CrystalEngine;
 use crate::pulse::encode_text;
-use crate::registry::{BehavioralCapability, Primitive, Registry};
+use crate::registry::{BehavioralCapability, Registry};
 use chrono::Utc;
 
 pub const NOISE_SHIELDING: &str = "noise_shielding";
@@ -36,29 +36,35 @@ const POSITIVE_TRIAL_FLOOR: f64 = 0.7;
 const BEHAVIOR_LEVEL: u8 = 6;
 const MIN_LEVEL_FOR_PROMOTION: u8 = 2;
 
-fn trial_engine(prim: &Primitive, seed: u64) -> CrystalEngine {
-    let material = if crate::material::find_material(&prim.material_id).is_some() {
-        prim.material_id.clone()
+/// True for a name this build has a contract for — validate BEFORE a
+/// long run, not trial-by-trial inside it.
+pub fn known_capability(name: &str) -> bool {
+    matches!(name, NOISE_SHIELDING | PATTERN_COMPLETION)
+}
+
+fn trial_engine(material_id: &str, seed: u64) -> CrystalEngine {
+    let material = if crate::material::find_material(material_id).is_some() {
+        material_id
     } else {
         // Swarm-imported primitives may reference materials this build
         // doesn't know (e.g. "hrm"); test in the reference medium.
-        "ideal_resonator".to_string()
+        "ideal_resonator"
     };
-    CrystalEngine::new(&material, 64, seed).expect("builtin material")
+    CrystalEngine::new(material, 64, seed).expect("builtin material")
 }
 
-/// Paint the primitive's 16x16 signature into the field center — the
-/// same instantiation approximation the MERGE/SPLIT ops use.
-fn instantiate(engine: &mut CrystalEngine, prim: &Primitive) {
+/// Paint a 16x16 signature into the field center — the same
+/// instantiation approximation the MERGE/SPLIT ops use.
+fn instantiate(engine: &mut CrystalEngine, signature: &[f64]) {
     const S: usize = 16;
-    if prim.signature.len() != S * S {
+    if signature.len() != S * S {
         return;
     }
     let n = engine.field.size;
     let span = n as f64 * 0.35;
     for sy in 0..S {
         for sx in 0..S {
-            let v = prim.signature[sy * S + sx];
+            let v = signature[sy * S + sx];
             if v.abs() < 1e-9 {
                 continue;
             }
@@ -76,12 +82,12 @@ fn target_text(seed: u64) -> String {
 }
 
 /// One noise-shielding trial: physical recall of a written target after
-/// noisy evolution, with vs without the primitive present.
-fn noise_shielding_trial(prim: &Primitive, seed: u64) -> f64 {
-    let run = |with_prim: bool| {
-        let mut engine = trial_engine(prim, seed);
-        if with_prim {
-            instantiate(&mut engine, prim);
+/// noisy evolution, with vs without the structure present.
+fn noise_shielding_trial(signature: &[f64], material_id: &str, seed: u64) -> f64 {
+    let run = |with_structure: bool| {
+        let mut engine = trial_engine(material_id, seed);
+        if with_structure {
+            instantiate(&mut engine, signature);
         }
         engine.write(&target_text(seed), 1.0);
         engine.noise_amp = 0.01;
@@ -93,12 +99,12 @@ fn noise_shielding_trial(prim: &Primitive, seed: u64) -> f64 {
 
 /// One pattern-completion trial: inject HALF the target's constellation
 /// as a cue, evolve, and measure physical recall of the FULL pattern —
-/// with vs without the primitive present.
-fn pattern_completion_trial(prim: &Primitive, seed: u64) -> f64 {
-    let run = |with_prim: bool| {
-        let mut engine = trial_engine(prim, seed);
-        if with_prim {
-            instantiate(&mut engine, prim);
+/// with vs without the structure present.
+fn pattern_completion_trial(signature: &[f64], material_id: &str, seed: u64) -> f64 {
+    let run = |with_structure: bool| {
+        let mut engine = trial_engine(material_id, seed);
+        if with_structure {
+            instantiate(&mut engine, signature);
         }
         let full = encode_text(&target_text(seed), engine.field.size);
         // Deterministic half-cue: zero every second column block.
@@ -115,6 +121,32 @@ fn pattern_completion_trial(prim: &Primitive, seed: u64) -> f64 {
     run(true) - run(false)
 }
 
+/// Mean contract advantage of a raw signature over `trials` deterministic
+/// seeds — the in-loop hook capability-directed evolution selects on.
+/// Same trials, same targets, same instantiation as the recorded
+/// procedure, so in-loop selection optimizes exactly what `promote
+/// --procedure behavior` later measures.
+pub fn contract_advantage(
+    signature: &[f64],
+    material_id: &str,
+    capability: &str,
+    trials: u64,
+) -> Result<f64, String> {
+    let trial_fn: fn(&[f64], &str, u64) -> f64 = match capability {
+        NOISE_SHIELDING => noise_shielding_trial,
+        PATTERN_COMPLETION => pattern_completion_trial,
+        other => {
+            return Err(format!(
+                "unknown capability: {other} ({NOISE_SHIELDING}|{PATTERN_COMPLETION})"
+            ))
+        }
+    };
+    let sum: f64 = (0..trials)
+        .map(|seed| trial_fn(signature, material_id, seed))
+        .sum();
+    Ok(sum / trials.max(1) as f64)
+}
+
 /// Run a behavioral contract over `trials` deterministic seeds and, on a
 /// pass, register the capability (and Level 6 if the primitive is at
 /// least Replicated). Returns the capability record either way.
@@ -129,7 +161,7 @@ pub fn test_capability(
         .find(id)
         .ok_or_else(|| format!("unknown primitive: {id}"))?
         .clone();
-    let trial_fn: fn(&Primitive, u64) -> f64 = match capability {
+    let trial_fn: fn(&[f64], &str, u64) -> f64 = match capability {
         NOISE_SHIELDING => noise_shielding_trial,
         PATTERN_COMPLETION => pattern_completion_trial,
         other => {
@@ -141,7 +173,7 @@ pub fn test_capability(
 
     let mut advantages = Vec::new();
     for seed in 0..trials {
-        let adv = trial_fn(&prim, seed);
+        let adv = trial_fn(&prim.signature, &prim.material_id, seed);
         progress(format!("  trial {seed}: advantage {adv:+.4}"));
         advantages.push(adv);
     }

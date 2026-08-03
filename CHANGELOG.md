@@ -2,6 +2,28 @@
 
 All notable changes to kannaka-crystal are documented here.
 
+## v0.14.0 — 2026-08-02
+
+Capability-directed evolution. The robust-mode eval produced the first
+Level-3 primitive but both behavioral contracts still failed on it —
+robustness ≠ capability (8 failed contracts across 4 primitives).
+Capabilities must be selected for directly, the same way robustness was.
+
+### Added
+- `evolve --select-for noise_shielding|pattern_completion
+  [--capability-trials 3]`: fitness gains 20× the candidate's mean
+  in-loop contract advantage (same trials, targets, and instantiation
+  as `promote --procedure behavior`, so selection optimizes exactly
+  what the recorded procedure later measures; negative advantage counts
+  against). Composes with `--robust`. Discovery lines report
+  `advantage=`.
+- `behavior::contract_advantage(signature, material, capability,
+  trials)` — contract trials refactored to run on raw signatures;
+  `behavior::known_capability` validates names before a run.
+- `EvolutionConfig.select_capability` / `capability_trials`
+  (serde-default None/3, old manifests unaffected); part of the
+  protocol hash.
+
 ## v0.13.0 — 2026-08-02
 
 Robust-mode evolution. The full evidence-chain sweep showed classic

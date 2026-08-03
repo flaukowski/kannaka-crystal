@@ -28,6 +28,12 @@ const ROBUST_WEIGHT: f64 = 1.0;
 /// Default in-loop noise levels when robust mode is on and the config
 /// doesn't specify any (a cheap subset of the §8 ensemble).
 const ROBUST_DEFAULT_NOISE: [f64; 2] = [0.01, 0.05];
+/// Weight of the contract-advantage term in capability-directed mode.
+/// Advantages are small (a contract pass is mean ≥ 0.01, strong ≈ 0.05),
+/// so 20× maps a passing-level advantage to 0.2 fitness and a strong one
+/// to 1.0 — competitive with the persistence term. Negative advantage
+/// counts against fitness: hurting the task is worse than absent.
+const CAPABILITY_WEIGHT: f64 = 20.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Genome {
@@ -127,6 +133,22 @@ pub struct EvolutionConfig {
     /// Noise levels for the in-loop ensemble; empty = ROBUST_DEFAULT_NOISE.
     #[serde(default)]
     pub robust_noise_levels: Vec<f64>,
+    /// Capability-directed mode: name of a behavioral contract
+    /// (`noise_shielding` | `pattern_completion`). Fitness gains
+    /// `CAPABILITY_WEIGHT × mean contract advantage` of each candidate's
+    /// best structure — the 08-02 finding that robustness ≠ capability
+    /// (8 failed contracts, including on an L3 attractor) means
+    /// capabilities must be selected for directly.
+    #[serde(default)]
+    pub select_capability: Option<String>,
+    /// In-loop trials per contract evaluation (each trial = 2 field
+    /// simulations). The recorded procedure still uses its own trials.
+    #[serde(default = "default_capability_trials")]
+    pub capability_trials: u64,
+}
+
+fn default_capability_trials() -> u64 {
+    3
 }
 
 impl Default for EvolutionConfig {
@@ -141,6 +163,8 @@ impl Default for EvolutionConfig {
             ambient_noise: 0.0,
             robust_seeds: 0,
             robust_noise_levels: vec![],
+            select_capability: None,
+            capability_trials: default_capability_trials(),
         }
     }
 }
@@ -307,7 +331,25 @@ pub fn evolve(
             } else {
                 None
             };
-            s.fitness = persistence + 0.5 * novelty + ROBUST_WEIGHT * survival.unwrap_or(0.0);
+            // Capability-directed mode: in-loop contract advantage.
+            let advantage = cfg.select_capability.as_ref().map(|cap| {
+                structures
+                    .first()
+                    .and_then(|best| {
+                        crate::behavior::contract_advantage(
+                            &best.signature,
+                            &cfg.material_id,
+                            cap,
+                            cfg.capability_trials,
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(0.0)
+            });
+            s.fitness = persistence
+                + 0.5 * novelty
+                + ROBUST_WEIGHT * survival.unwrap_or(0.0)
+                + CAPABILITY_WEIGHT * advantage.unwrap_or(0.0);
             best_fitness = best_fitness.max(s.fitness);
 
             // Register anything stable AND novel.
@@ -339,15 +381,18 @@ pub fn evolve(
                     Some(experiment.clone()),
                     Some((s.genome.id, s.genome.parent_id.into_iter().collect())),
                 ) {
+                    let survival_note = survival
+                        .map(|sv| format!(" survival={:.0}%", sv * 100.0))
+                        .unwrap_or_default();
+                    let advantage_note = advantage
+                        .map(|adv| format!(" advantage={adv:+.4}"))
+                        .unwrap_or_default();
                     progress(format!(
-                        "  [gen {gen}] discovered {} ({}) persistence={:.1}% noise-tol={:.1}%{}",
+                        "  [gen {gen}] discovered {} ({}) persistence={:.1}% noise-tol={:.1}%{survival_note}{advantage_note}",
                         prim.id,
                         prim.class,
                         prim.persistence * 100.0,
                         prim.noise_tolerance * 100.0,
-                        survival
-                            .map(|sv| format!(" survival={:.0}%", sv * 100.0))
-                            .unwrap_or_default()
                     ));
                     registered_by_genome
                         .entry(s.genome.id)
@@ -460,6 +505,32 @@ mod tests {
         assert_ne!(
             rep1.manifest.experiment_hash(),
             rep2.manifest.experiment_hash()
+        );
+    }
+
+    #[test]
+    fn capability_directed_mode_runs_and_is_a_distinct_protocol() {
+        let base = EvolutionConfig {
+            material_id: "metamaterial".into(),
+            generations: 1,
+            population: 2,
+            field_size: 48,
+            seed: 13,
+            ..Default::default()
+        };
+        let directed = EvolutionConfig {
+            select_capability: Some(crate::behavior::NOISE_SHIELDING.into()),
+            capability_trials: 1,
+            ..base.clone()
+        };
+        let mut r1 = Registry::default();
+        let rep1 = evolve(&base, &mut r1, |_| {});
+        let mut r2 = Registry::default();
+        let rep2 = evolve(&directed, &mut r2, |_| {});
+        assert_ne!(
+            rep1.manifest.experiment_hash(),
+            rep2.manifest.experiment_hash(),
+            "capability selection is protocol, not a footnote"
         );
     }
 
