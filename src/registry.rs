@@ -97,6 +97,8 @@ pub struct BehavioralCapability {
     /// Whether the contract's pass criteria were met.
     pub passed: bool,
     /// Mean advantage of primitive-present over primitive-absent trials.
+    /// Under v2 this is the HELD-OUT mean: the search never saw these
+    /// seeds.
     pub mean_advantage: f64,
     pub std_advantage: f64,
     /// Fraction of trials with positive advantage.
@@ -104,6 +106,58 @@ pub struct BehavioralCapability {
     pub trials: u64,
     pub at: DateTime<Utc>,
     pub node: String,
+    /// v2: the placement the search selected. Absent on v1 records,
+    /// which always used the fixed placement `Instantiation::default()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instantiation: Option<Instantiation>,
+    /// v2: in-sample mean over the fit seeds. Reported for the gap
+    /// against `mean_advantage` — a large gap is overfitting, visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_advantage: Option<f64>,
+    /// v2: held-out mean for a scrambled signature searched the same
+    /// way. The structure must beat its own scramble or the result is
+    /// an artifact of searching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_advantage: Option<f64>,
+}
+
+/// Where a structure is placed into a task field, how large, how strong,
+/// and facing which way (ADR-0004 Phase 4.2).
+///
+/// The default reproduces the v1 contract's fixed placement exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Instantiation {
+    /// Centre as a fraction of field width.
+    pub cx: f64,
+    /// Centre as a fraction of field height.
+    pub cy: f64,
+    /// Patch span as a fraction of field size.
+    pub scale: f64,
+    /// Amplitude multiplier applied to signature values.
+    pub gain: f64,
+    /// Rotation about the patch centre, radians.
+    pub rotation: f64,
+}
+
+impl Default for Instantiation {
+    fn default() -> Self {
+        Self {
+            cx: 0.5,
+            cy: 0.5,
+            scale: 0.35,
+            gain: 3.0,
+            rotation: 0.0,
+        }
+    }
+}
+
+impl Instantiation {
+    pub fn describe(&self) -> String {
+        format!(
+            "centre ({:.2},{:.2}) scale {:.2} gain {:.1} rot {:.2}rad",
+            self.cx, self.cy, self.scale, self.gain, self.rotation
+        )
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
