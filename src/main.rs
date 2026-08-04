@@ -116,9 +116,20 @@ enum Command {
         /// (noise_shielding | pattern_completion)
         #[arg(long)]
         capability: Option<String>,
-        /// Trials for the behavioral contract
-        #[arg(long, default_value_t = 10)]
+        /// Trials for the behavioral contract. Trial-to-trial spread is
+        /// ~0.025 against a 0.01 bar, so a handful of seeds cannot tell
+        /// a crossing from noise — CRY-012630 "passed" on 6 and failed
+        /// on 30.
+        #[arg(long, default_value_t = 30)]
         trials: u64,
+        /// Behavioral contract version: v1 fixes the instantiation, v2
+        /// searches it on fit seeds and scores on held-out seeds
+        #[arg(long, default_value = "v1")]
+        contract: String,
+        /// v2 only: seeds the instantiation search may fit on. Scoring
+        /// uses --trials further seeds the search never sees.
+        #[arg(long, default_value_t = 4)]
+        fit_seeds: u64,
         /// Seeds for the perturbation ensemble (§8 standard: 8)
         #[arg(long, default_value_t = 8)]
         seeds: u64,
@@ -301,6 +312,8 @@ fn dispatch(command: Command) -> Result<(), String> {
             seeds,
             capability,
             trials,
+            contract,
+            fit_seeds,
         } => {
             let mut registry = Registry::load().map_err(|e| e.to_string())?;
             if procedure == "behavior" {
@@ -308,19 +321,31 @@ fn dispatch(command: Command) -> Result<(), String> {
                     "--procedure behavior needs --capability \
                      (noise_shielding | pattern_completion)",
                 )?;
-                let record = kannaka_crystal::behavior::test_capability(
-                    &mut registry,
-                    &id,
-                    &cap,
-                    trials,
-                    |l| eprintln!("{l}"),
-                )?;
+                let record = match contract.as_str() {
+                    "v1" => kannaka_crystal::behavior::test_capability(
+                        &mut registry,
+                        &id,
+                        &cap,
+                        trials,
+                        |l| eprintln!("{l}"),
+                    )?,
+                    "v2" => kannaka_crystal::behavior::test_capability_v2(
+                        &mut registry,
+                        &id,
+                        &cap,
+                        fit_seeds,
+                        trials,
+                        |l| eprintln!("{l}"),
+                    )?,
+                    other => return Err(format!("unknown contract: {other} (v1|v2)")),
+                };
                 registry.save().map_err(|e| e.to_string())?;
                 let prim = registry.find(&id).unwrap();
                 println!(
-                    "{} {} {}: mean advantage {:+.4}±{:.4} ({:.0}% positive, {} trials) -> L{}",
+                    "{} {} [{}] {}: mean advantage {:+.4}±{:.4} ({:.0}% positive, {} trials) -> L{}",
                     prim.id,
                     record.name,
+                    record.contract_version,
                     if record.passed {
                         "PASSED"
                     } else {
@@ -332,6 +357,15 @@ fn dispatch(command: Command) -> Result<(), String> {
                     record.trials,
                     prim.evidence_level,
                 );
+                if let Some(p) = record.instantiation {
+                    println!("  placement: {}", p.describe());
+                    println!(
+                        "  in-sample {:+.4} | held-out {:+.4} | scrambled control {:+.4}",
+                        record.fit_advantage.unwrap_or(f64::NAN),
+                        record.mean_advantage,
+                        record.control_advantage.unwrap_or(f64::NAN),
+                    );
+                }
                 return Ok(());
             }
             let record = match procedure.as_str() {

@@ -426,6 +426,32 @@ genealogy.
 demonstrated capabilities; behavioral search in the registry; expose
 capabilities to KannakaHDL.
 
+**Phase 4.2: Evolvable Instantiation (behavior-contract-v2)** — v1 held
+placement, scale, amplitude and orientation fixed while asking whether a
+structure confers a capability, so it could only ever measure what a
+structure does passively from the centre of the field at one strength.
+Directed evolution under v1 enriched every candidate it touched and
+crossed nothing, and more generations did not move the ceiling; that is
+the signature of a bound outside the thing being optimized. v2 therefore
+makes instantiation part of what is searched.
+
+Because searching placement gives any patch many chances to look good,
+v2 is defined with the anti-overfitting machinery attached rather than
+added later:
+
+- **Disjoint seed split.** The search fits on one seed set; the recorded
+  `mean_advantage` is measured on seeds the search never saw. The
+  in-sample score is also recorded, as `fit_advantage`, so the gap
+  between them is visible in the registry rather than inferred.
+- **Scrambled-signature control.** The identical search and scoring runs
+  on a deterministic permutation of the signature, which preserves its
+  value distribution and destroys its arrangement. A pass requires the
+  structure's held-out advantage to exceed its own scramble's.
+
+The third clause is the load-bearing one. Without it, "capability found
+by better placing" and "advantage manufactured by searching" are the
+same number.
+
 **Phase 5: Physical Models** — phenomenological/physical/calibrated/
 hardware model namespaces; references and calibration metadata; physical
 models only when supported by documented mechanisms or data.
