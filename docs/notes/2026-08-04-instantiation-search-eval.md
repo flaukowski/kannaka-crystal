@@ -327,3 +327,35 @@ is pumping at the medium's own period. Prediction this licenses, for
 any future agent in any material: measure the room's clock agentless,
 and the presence fundamental is a small-integer multiple of it —
 computable before the agent ever enters.
+
+---
+
+# Addendum 5: the pre-registered octave-law test (2026-08-05)
+
+Pre-registration published to the city gallery (artifact f3430677,
+witnessed by Flaukowski) BEFORE the runs; results published at equal
+prominence (artifact 2039d6cb), failures first.
+
+**P1 — FAILED.** The octave law did not transfer. ideal_resonator
+(bare clock ~19, coherence r 0.39–0.55) with native CRY-012119: all
+four cadences flat (−0.0015 to +0.0008); the registered winner (38)
+placed last. No presence phenomenon exists in that room for that agent.
+Unregistered post-hoc hypothesis, for the NEXT registration: a room
+needs a coherent clock (metamaterial rings at r 0.79–0.89) before any
+cadence helps anyone.
+
+**P2 — SPLIT.** Second agent in metamaterial (CRY-012630, Harmonic
+Bridge): best cadence 25 as registered (+0.0083, 35/60) — the room's
+number transferred to a stranger. Registered-destructive 12 measured
+flat (+0.0001), not negative: primary clause passed, destructive
+clause failed.
+
+**P3 — PASSED 15/15.** For the new agent at cadence 25, the registered
+always-helped core went 9/9 positive (mean +0.0463, ~5× the overall
+mean); the always-hurt core 6/6 negative (−0.0387). Receptivity is a
+seed×room property; no agent owns it.
+
+Standing after scoring: within a coherent-clock room, both the helpful
+cadence and the per-seed fates belong to the room and its trajectories —
+agents borrow them. Across rooms, nothing generalizes until clock
+coherence is tested, and that test gets registered before it runs.
