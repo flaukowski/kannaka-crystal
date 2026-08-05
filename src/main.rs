@@ -140,6 +140,10 @@ enum Command {
         /// v3 research: FORCE the presence gain fraction
         #[arg(long)]
         force_gain: Option<f64>,
+        /// v3 research: phase offset in steps for the forced assertion
+        /// train (first re-assertion after this many steps; 0 = in phase)
+        #[arg(long, default_value_t = 0)]
+        force_phase: u64,
         /// v4: first held-out seed index (default = right after fit
         /// seeds). Use 68+ so scoring clears the seeds the gate
         /// thresholds were derived from.
@@ -148,6 +152,25 @@ enum Command {
         /// Seeds for the perturbation ensemble (§8 standard: 8)
         #[arg(long, default_value_t = 8)]
         seeds: u64,
+    },
+    /// Agentless medium chronometry: write a task target into a bare
+    /// field (no structure, no presence), evolve, and print the probe
+    /// resonance at every step. Autocorrelate the output to find the
+    /// medium's own period — the number any agent's presence fundamental
+    /// should be compared against.
+    Clock {
+        #[arg(long, default_value = "metamaterial")]
+        material: String,
+        #[arg(long, default_value_t = 64)]
+        size: usize,
+        #[arg(long, default_value_t = 400)]
+        steps: u64,
+        #[arg(long, default_value_t = 8)]
+        seed: u64,
+        /// Probe/target text (defaults to the behavior-contract target
+        /// for the given seed)
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Run the KCB-1 benchmark suite: physical-recall benchmarks across
     /// non-resonant baselines and mechanism ablations (ADR-0004 §10)
@@ -331,6 +354,7 @@ fn dispatch(command: Command) -> Result<(), String> {
             fit_seeds,
             force_every,
             force_gain,
+            force_phase,
             held_out_start,
         } => {
             let mut registry = Registry::load().map_err(|e| e.to_string())?;
@@ -365,6 +389,7 @@ fn dispatch(command: Command) -> Result<(), String> {
                                 trials,
                                 every,
                                 gain,
+                                force_phase,
                                 |l| eprintln!("{l}"),
                             )?
                         }
@@ -538,6 +563,30 @@ fn dispatch(command: Command) -> Result<(), String> {
                 hits.len(),
                 registry.primitives.len()
             );
+            Ok(())
+        }
+        Command::Clock {
+            material,
+            size,
+            steps,
+            seed,
+            target,
+        } => {
+            let text = target.unwrap_or_else(|| format!("behavioral target {seed}"));
+            let mut engine = CrystalEngine::new(&material, size, seed)?;
+            engine.write(&text, 1.0);
+            engine.noise_amp = 0.01;
+            println!("step\tresonance\tenergy");
+            for step in 0..steps {
+                engine.resonate(1);
+                let probe = engine.probe(&text);
+                println!(
+                    "{}\t{:.6}\t{:.4}",
+                    step + 1,
+                    probe.physical_resonance,
+                    probe.field_energy
+                );
+            }
             Ok(())
         }
         Command::Bench {

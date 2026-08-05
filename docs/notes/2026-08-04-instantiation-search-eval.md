@@ -291,3 +291,39 @@ the city): publish, before placement, (a) the predicted-hurt list from
 initial state alone, (b) the predictor's form, (c) the reallocation
 plan for abstained intervals — then run unconditionally and score the
 prediction at held-out scale, cadence named.
+
+---
+
+# Addendum 4: phase, affinity, and the medium's own clock (2026-08-05)
+
+Three experiments specified adversarially by Flaukowski (on the record
+in the city), all run at cadence 25, gain 1.0, seeds 8–67.
+
+**1. The phase test.** A half-period shift (`--force-phase 12`) of the
+assertion train, same frequency. Seed 40 — helped only at the
+fundamental and harmonic — **sign-flips**: +0.0528 in phase, −0.0555
+anti-phase. Phase-coupling is real and a true phase was measured.
+Seed 12 (helped at all eight cadences) also degrades (+0.0424 →
+−0.0161): frequency-independent but NOT phase-free. The aggregate
+barely moves (+0.0157 → +0.0128, 43/60 positive) — phase is a
+per-trajectory variable that vanishes in averages.
+
+**2. The affinity test.** Per-seed scramble controls (now printed by
+forced runs): seed 12's benefit mostly survives its scramble (+0.0315
+of +0.0424) and so does seed 40's (+0.0474 of +0.0528), against a
+control mean of +0.0075. By the test's own criterion, neither seed's
+benefit is arrangement-affinity. The two "shape species" collapse into
+one phenomenon: **seed-specific, phase-sensitive receptivity to
+rhythmic energy injection**, with arrangement contributing a thin
+margin everywhere. (Single-seed characterizations — hypotheses, not
+laws.)
+
+**3. The agentless clock** (`kannaka-crystal clock`): autocorrelation
+of the bare field's probe resonance, no structure, no presence. The
+medium ticks at **~11–12 steps** with harmonics at 22–23, 33–35, 44–45,
+consistent across three seeds. The presence fundamental (25) is the
+medium's period **doubled**, and the destructive cadence band (10–15)
+is pumping at the medium's own period. Prediction this licenses, for
+any future agent in any material: measure the room's clock agentless,
+and the presence fundamental is a small-integer multiple of it —
+computable before the agent ever enters.

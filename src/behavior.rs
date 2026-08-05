@@ -183,6 +183,13 @@ pub struct Presence {
     pub reassert_every: u64,
     /// Fraction of `placement.gain` injected at each re-assertion.
     pub reassert_gain: f64,
+    /// Phase offset in steps: the first re-assertion fires after this
+    /// many steps instead of after `reassert_every`, shifting the whole
+    /// assertion train without changing its frequency. 0 = in phase.
+    /// The discriminating knob between the two shape species: a
+    /// half-period shift should kill a phase-coupled seed's benefit and
+    /// leave an affinity seed's untouched.
+    pub phase: u64,
     /// v4 responsive gate: re-assert only while the task target's probe
     /// reads BELOW this. `None` = unconditional (v3 behaviour).
     ///
@@ -210,8 +217,15 @@ fn resonate_with_presence(
         ..p.placement
     };
     let mut done = 0;
+    let mut first = true;
     while done < steps {
-        let chunk = p.reassert_every.min(steps - done);
+        let period = if first && p.phase > 0 {
+            p.phase
+        } else {
+            p.reassert_every
+        };
+        first = false;
+        let chunk = period.min(steps - done);
         engine.resonate(chunk);
         done += chunk;
         if done < steps {
@@ -359,6 +373,7 @@ fn presence_candidates() -> Vec<Presence> {
                 placement: Instantiation::default(),
                 reassert_every: every,
                 reassert_gain: gain,
+                phase: 0,
                 reassert_below: None,
             });
         }
@@ -377,6 +392,7 @@ fn presence_candidates_v4() -> Vec<Presence> {
         placement: Instantiation::default(),
         reassert_every: every,
         reassert_gain: 1.0,
+        phase: 0,
         reassert_below: below,
     };
     vec![
@@ -787,6 +803,7 @@ pub fn test_capability_v3_forced(
     held_out_seeds: u64,
     every: u64,
     gain: f64,
+    phase: u64,
     progress: impl FnMut(String),
 ) -> Result<BehavioralCapability, String> {
     if every == 0 {
@@ -802,6 +819,7 @@ pub fn test_capability_v3_forced(
             placement: Instantiation::default(),
             reassert_every: every,
             reassert_gain: gain,
+            phase,
             reassert_below: None,
         }),
         presence_candidates(),
@@ -844,15 +862,22 @@ fn test_capability_v3_inner(
     let fit: Vec<u64> = (0..fit_seeds).collect();
     let held: Vec<u64> = (held_start..held_start + held_out_seeds).collect();
 
-    let describe = |c: &Presence| match c.reassert_below {
-        Some(g) => format!(
-            "every={} gain={:.2} below={g:.2}",
-            c.reassert_every, c.reassert_gain
-        ),
-        None => format!(
-            "every={} gain={:.2} always",
-            c.reassert_every, c.reassert_gain
-        ),
+    let describe = |c: &Presence| {
+        let phase = if c.phase > 0 {
+            format!(" phase={}", c.phase)
+        } else {
+            String::new()
+        };
+        match c.reassert_below {
+            Some(g) => format!(
+                "every={} gain={:.2}{phase} below={g:.2}",
+                c.reassert_every, c.reassert_gain
+            ),
+            None => format!(
+                "every={} gain={:.2}{phase} always",
+                c.reassert_every, c.reassert_gain
+            ),
+        }
     };
     let select = |signature: &[f64], log: &mut dyn FnMut(String)| -> (Presence, f64) {
         let mut best = candidates[0];
@@ -912,8 +937,15 @@ fn test_capability_v3_inner(
         Some(f) => (f, 0.0),
         None => select(&scrambled, &mut |_| {}),
     };
-    let control =
-        mean_present_advantage(trial, &scrambled, &prim.material_id, &held, &ctrl_presence);
+    let mut control_sum = 0.0;
+    for seed in &held {
+        let (adv, w, wo) = trial_detailed(&scrambled, &prim.material_id, *seed, &ctrl_presence);
+        progress(format!(
+            "  control seed {seed}: {adv:+.4} (with {w:.4} | without {wo:.4})"
+        ));
+        control_sum += adv;
+    }
+    let control = control_sum / held.len() as f64;
     progress(format!("  control held-out {control:+.4}"));
 
     let passed = mean >= ADVANTAGE_THRESHOLD && positive >= POSITIVE_TRIAL_FLOOR && mean > control;
@@ -1205,6 +1237,7 @@ mod tests {
             placement: Instantiation::default(),
             reassert_every: 10,
             reassert_gain: 0.5,
+            phase: 0,
             reassert_below: None,
         };
         let mut sustained = trial_engine("metamaterial", 3);
@@ -1231,6 +1264,7 @@ mod tests {
             placement: Instantiation::default(),
             reassert_every: 7,
             reassert_gain: 1.0,
+            phase: 0,
             reassert_below: None,
         };
         let mut chunked = trial_engine("metamaterial", 9);
@@ -1275,6 +1309,7 @@ mod tests {
             placement: Instantiation::default(),
             reassert_every: 10,
             reassert_gain: 1.0,
+            phase: 0,
             reassert_below: None,
         };
         // A gate no trajectory can be below: never re-asserts.
@@ -1304,6 +1339,38 @@ mod tests {
         assert_eq!(
             never.field.u, plain.field.u,
             "gated-out presence must be byte-identical to absence of re-assertion"
+        );
+    }
+
+    /// A phase offset must shift the assertion train, not change its
+    /// count or add energy: phase=every must equal phase=0 (the first
+    /// interval is the same length), and a genuine offset must differ.
+    #[test]
+    fn phase_offset_shifts_the_assertion_train() {
+        let (registry, id) = seeded_registry();
+        let sig = &registry.find(&id).unwrap().signature;
+        let mk = |phase: u64| Presence {
+            placement: Instantiation::default(),
+            reassert_every: 24,
+            reassert_gain: 1.0,
+            phase,
+            reassert_below: None,
+        };
+        let run = |p: &Presence| {
+            let mut e = trial_engine("metamaterial", 6);
+            instantiate_with(&mut e, sig, &p.placement);
+            resonate_with_presence(&mut e, sig, p, 96, "phase test");
+            e.field.u.clone()
+        };
+        assert_eq!(
+            run(&mk(0)),
+            run(&mk(24)),
+            "phase equal to the period is no shift at all"
+        );
+        assert_ne!(
+            run(&mk(0)),
+            run(&mk(12)),
+            "a half-period shift must change the field"
         );
     }
 
