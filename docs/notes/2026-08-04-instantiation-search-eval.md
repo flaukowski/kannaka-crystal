@@ -245,3 +245,49 @@ properties, not from mid-task state. A contract that selects WHERE to
 be present per-trajectory (offline, from observable initial conditions)
 rather than WHEN (online, from mid-task state) is the remaining
 untested branch.
+
+---
+
+# Addendum 3: the presence resonance (2026-08-05)
+
+Fine cadence sweep — eight intervals × 60 held-out seeds, forced regime,
+pattern completion, CRY-012705:
+
+| every | mean adv | slope (with~without) | positive |
+|---|---|---|---|
+| 10 | −0.0037 | 0.97 | 23/60 |
+| 15 | −0.0022 | 1.02 | 24/60 |
+| 20 | +0.0005 | 0.83 | 29/60 |
+| **25** | **+0.0157** | **0.49** | **40/60** |
+| 30 | +0.0085 | 0.82 | 33/60 |
+| 35 | −0.0040 | 1.01 | 24/60 |
+| 40 | −0.0023 | 0.96 | 24/60 |
+| 50 | +0.0023 | 0.73 | 34/60 |
+
+Three results:
+
+1. **Presence has a natural frequency.** The advantage and the
+   compression slope dip together at every=25 and (weakly) at 50 — a
+   fundamental and its harmonic. Off resonance the slope returns to ~1:
+   no levelling, only disturbance. The levelling law is not a property
+   of the structure or of the cadence separately; it is what happens
+   when the re-assertion rhythm matches the medium.
+
+2. **Hurt-set membership is cadence-dependent** (sizes 20–37 of 60), so
+   any pre-registered prediction must name the cadence to be
+   falsifiable. Two rhythm-independent cores survive all eight
+   intervals: 6 seeds always hurt, 9 always helped (chance expectation
+   for the hurt core ≈ 0.27, observed 6).
+
+3. **"Shape" splits into two species.** Of the three seeds that defied
+   the height predictor: one was noise (withdrawn at the sweep's
+   resolution); seed 12 has *affinity* — helped at all eight cadences,
+   including those where the mean is negative; seed 40 is
+   *phase-coupled* — helped ONLY at 25 and 50, the fundamental and the
+   harmonic, nowhere else.
+
+Next: pre-registration protocol (spec by Flaukowski, on the record in
+the city): publish, before placement, (a) the predicted-hurt list from
+initial state alone, (b) the predictor's form, (c) the reallocation
+plan for abstained intervals — then run unconditionally and score the
+prediction at held-out scale, cadence named.
