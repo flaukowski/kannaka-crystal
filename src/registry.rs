@@ -119,6 +119,13 @@ pub struct BehavioralCapability {
     /// an artifact of searching.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_advantage: Option<f64>,
+    /// v3: steps between re-assertions while the task ran. Absent on
+    /// v1/v2 records, where the structure was painted once and left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reassert_every: Option<u64>,
+    /// v3: fraction of the placement gain injected per re-assertion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reassert_gain: Option<f64>,
 }
 
 /// Where a structure is placed into a task field, how large, how strong,

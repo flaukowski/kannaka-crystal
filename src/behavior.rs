@@ -31,6 +31,7 @@ pub const NOISE_SHIELDING: &str = "noise_shielding";
 pub const PATTERN_COMPLETION: &str = "pattern_completion";
 pub const CONTRACT_VERSION: &str = "behavior-contract-v1";
 pub const CONTRACT_VERSION_V2: &str = "behavior-contract-v2";
+pub const CONTRACT_VERSION_V3: &str = "behavior-contract-v3";
 
 const ADVANTAGE_THRESHOLD: f64 = 0.01;
 const POSITIVE_TRIAL_FLOOR: f64 = 0.7;
@@ -157,6 +158,150 @@ fn pattern_completion_trial_at(
         engine.probe(&target_text(seed)).physical_resonance
     };
     run(true) - run(false)
+}
+
+/// v3: a structure that is PRESENT during the task rather than painted
+/// once before it.
+///
+/// v1 and v2 both instantiate at step zero and let the field evolve
+/// without the structure — and this medium mixes any write into the
+/// bulk within ~300 steps (ADR-0001), so by the time the task's outcome
+/// is measured the structure is a ghost. A real structure in a medium
+/// is not an initial condition; it is continuously there. `Presence`
+/// models that by re-asserting the signature every `reassert_every`
+/// steps at `reassert_gain` of the placement's gain.
+///
+/// The energy this injects is exactly why the scrambled control matters
+/// here more than in v2: the scramble receives the identical sustained
+/// injection, so "helped because arranged" and "helped because energized"
+/// are separable.
+#[derive(Debug, Clone, Copy)]
+pub struct Presence {
+    pub placement: Instantiation,
+    /// Steps between re-assertions during the task window.
+    pub reassert_every: u64,
+    /// Fraction of `placement.gain` injected at each re-assertion.
+    pub reassert_gain: f64,
+}
+
+/// Evolve `steps` with the structure re-asserted throughout.
+fn resonate_with_presence(engine: &mut CrystalEngine, signature: &[f64], p: &Presence, steps: u64) {
+    let sustained = Instantiation {
+        gain: p.placement.gain * p.reassert_gain,
+        ..p.placement
+    };
+    let mut done = 0;
+    while done < steps {
+        let chunk = p.reassert_every.min(steps - done);
+        engine.resonate(chunk);
+        done += chunk;
+        if done < steps {
+            instantiate_with(engine, signature, &sustained);
+        }
+    }
+}
+
+fn noise_shielding_trial_present(
+    signature: &[f64],
+    material_id: &str,
+    seed: u64,
+    p: &Presence,
+) -> f64 {
+    let run = |with_structure: bool| {
+        let mut engine = trial_engine(material_id, seed);
+        if with_structure {
+            instantiate_with(&mut engine, signature, &p.placement);
+        }
+        engine.write(&target_text(seed), 1.0);
+        engine.noise_amp = 0.01;
+        if with_structure {
+            resonate_with_presence(&mut engine, signature, p, 200);
+        } else {
+            engine.resonate(200);
+        }
+        engine.probe(&target_text(seed)).physical_resonance
+    };
+    run(true) - run(false)
+}
+
+fn pattern_completion_trial_present(
+    signature: &[f64],
+    material_id: &str,
+    seed: u64,
+    p: &Presence,
+) -> f64 {
+    let run = |with_structure: bool| {
+        let mut engine = trial_engine(material_id, seed);
+        if with_structure {
+            instantiate_with(&mut engine, signature, &p.placement);
+        }
+        let full = encode_text(&target_text(seed), engine.field.size);
+        let n = engine.field.size;
+        for (i, v) in full.iter().enumerate() {
+            let x = i % n;
+            if (x / 8).is_multiple_of(2) {
+                engine.field.u[i] += v;
+            }
+        }
+        if with_structure {
+            resonate_with_presence(&mut engine, signature, p, 150);
+        } else {
+            engine.resonate(150);
+        }
+        engine.probe(&target_text(seed)).physical_resonance
+    };
+    run(true) - run(false)
+}
+
+type PresentTrialFn = fn(&[f64], &str, u64, &Presence) -> f64;
+
+fn present_trial_fn(capability: &str) -> Result<PresentTrialFn, String> {
+    match capability {
+        NOISE_SHIELDING => Ok(noise_shielding_trial_present),
+        PATTERN_COMPLETION => Ok(pattern_completion_trial_present),
+        other => Err(format!(
+            "unknown capability: {other} ({NOISE_SHIELDING}|{PATTERN_COMPLETION})"
+        )),
+    }
+}
+
+fn mean_present_advantage(
+    trial: PresentTrialFn,
+    signature: &[f64],
+    material_id: &str,
+    seeds: &[u64],
+    p: &Presence,
+) -> f64 {
+    if seeds.is_empty() {
+        return 0.0;
+    }
+    seeds
+        .iter()
+        .map(|s| trial(signature, material_id, *s, p))
+        .sum::<f64>()
+        / seeds.len() as f64
+}
+
+/// The v3 candidate ladder, deliberately tiny. v2's five-axis search
+/// demonstrated that a large placement space fits seed noise and
+/// generalizes to nothing; v3 fixes placement at the default and varies
+/// only how OFTEN and how HARD the structure stays present — nine
+/// combinations, few enough that the search cannot manufacture much.
+const REASSERT_EVERY: [u64; 3] = [10, 25, 50];
+const REASSERT_GAIN: [f64; 3] = [0.25, 0.5, 1.0];
+
+fn presence_candidates() -> Vec<Presence> {
+    let mut out = Vec::with_capacity(9);
+    for every in REASSERT_EVERY {
+        for gain in REASSERT_GAIN {
+            out.push(Presence {
+                placement: Instantiation::default(),
+                reassert_every: every,
+                reassert_gain: gain,
+            });
+        }
+    }
+    out
 }
 
 type PlacedTrialFn = fn(&[f64], &str, u64, &Instantiation) -> f64;
@@ -368,6 +513,8 @@ pub fn test_capability(
         instantiation: None,
         fit_advantage: None,
         control_advantage: None,
+        reassert_every: None,
+        reassert_gain: None,
     };
 
     let stored = registry.find_mut(id).ok_or("primitive vanished mid-test")?;
@@ -466,6 +613,111 @@ pub fn test_capability_v2(
         instantiation: Some(placement),
         fit_advantage: Some(fit_score),
         control_advantage: Some(control),
+        reassert_every: None,
+        reassert_gain: None,
+    };
+
+    let stored = registry.find_mut(id).ok_or("primitive vanished mid-test")?;
+    stored
+        .behavioral_capabilities
+        .retain(|c| c.name != capability);
+    stored.behavioral_capabilities.push(record.clone());
+    apply_behavior_level(stored);
+    Ok(record)
+}
+
+/// Run the v3 contract: the structure stays present during the task.
+///
+/// Selection is over nine (interval, strength) presence combinations at
+/// the default placement — small on purpose. Same discipline as v2:
+/// candidates are ranked on fit seeds, the winner is scored on held-out
+/// seeds it never saw, and a scrambled signature goes through the
+/// identical selection. Passing needs held-out mean ≥ threshold, ≥70%
+/// positive, and held-out > control. The scramble receives the same
+/// sustained energy injection as the structure, so beating it means the
+/// arrangement mattered, not the wattage.
+pub fn test_capability_v3(
+    registry: &mut Registry,
+    id: &str,
+    capability: &str,
+    fit_seeds: u64,
+    held_out_seeds: u64,
+    mut progress: impl FnMut(String),
+) -> Result<BehavioralCapability, String> {
+    if fit_seeds == 0 || held_out_seeds == 0 {
+        return Err("v3 needs at least one fit seed and one held-out seed".into());
+    }
+    let prim = registry
+        .find(id)
+        .ok_or_else(|| format!("unknown primitive: {id}"))?
+        .clone();
+    let trial = present_trial_fn(capability)?;
+    let fit: Vec<u64> = (0..fit_seeds).collect();
+    let held: Vec<u64> = (fit_seeds..fit_seeds + held_out_seeds).collect();
+
+    let select = |signature: &[f64], log: &mut dyn FnMut(String)| -> (Presence, f64) {
+        let mut best = presence_candidates()[0];
+        let mut best_score = f64::NEG_INFINITY;
+        for cand in presence_candidates() {
+            let score = mean_present_advantage(trial, signature, &prim.material_id, &fit, &cand);
+            log(format!(
+                "  fit every={} gain={:.2}: {score:+.4}",
+                cand.reassert_every, cand.reassert_gain
+            ));
+            if score > best_score {
+                best_score = score;
+                best = cand;
+            }
+        }
+        (best, best_score)
+    };
+
+    progress(format!("selecting presence on {} fit seeds", fit.len()));
+    let (presence, fit_score) = select(&prim.signature, &mut progress);
+    progress(format!(
+        "  selected every={} gain={:.2} (in-sample {fit_score:+.4})",
+        presence.reassert_every, presence.reassert_gain
+    ));
+
+    let mut advantages = Vec::new();
+    for seed in &held {
+        let adv = trial(&prim.signature, &prim.material_id, *seed, &presence);
+        advantages.push(adv);
+    }
+    let n = advantages.len() as f64;
+    let mean = advantages.iter().sum::<f64>() / n;
+    let std = (advantages.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / n).sqrt();
+    let positive = advantages.iter().filter(|a| **a > 0.0).count() as f64 / n;
+    progress(format!(
+        "  held-out over {} seeds: {mean:+.4}±{std:.4} ({:.0}% positive)",
+        held.len(),
+        positive * 100.0
+    ));
+
+    progress("control: same selection on a scrambled signature".into());
+    let scrambled = scramble(&prim.signature);
+    let (ctrl_presence, _) = select(&scrambled, &mut |_| {});
+    let control =
+        mean_present_advantage(trial, &scrambled, &prim.material_id, &held, &ctrl_presence);
+    progress(format!("  control held-out {control:+.4}"));
+
+    let passed = mean >= ADVANTAGE_THRESHOLD && positive >= POSITIVE_TRIAL_FLOOR && mean > control;
+
+    let record = BehavioralCapability {
+        name: capability.to_string(),
+        contract_version: CONTRACT_VERSION_V3.into(),
+        passed,
+        mean_advantage: mean,
+        std_advantage: std,
+        positive_fraction: positive,
+        trials: held_out_seeds,
+        at: Utc::now(),
+        node: std::env::var("KANNAKA_CRYSTAL_NODE").unwrap_or_else(|_| "local".into()),
+        instantiation: Some(presence.placement),
+        fit_advantage: Some(fit_score),
+        control_advantage: Some(control),
+        reassert_every: Some(presence.reassert_every),
+        reassert_gain: Some(presence.reassert_gain),
     };
 
     let stored = registry.find_mut(id).ok_or("primitive vanished mid-test")?;
@@ -726,6 +978,74 @@ mod tests {
         assert!(test_capability_v2(&mut registry, &id, NOISE_SHIELDING, 2, 0, |_| {}).is_err());
     }
 
+    /// Presence must actually change the physics: a field where the
+    /// structure is re-asserted during evolution ends up different from
+    /// one where it was painted once and abandoned.
+    #[test]
+    fn sustained_presence_differs_from_abandonment() {
+        let (registry, id) = seeded_registry();
+        let sig = &registry.find(&id).unwrap().signature;
+        let presence = Presence {
+            placement: Instantiation::default(),
+            reassert_every: 10,
+            reassert_gain: 0.5,
+        };
+        let mut sustained = trial_engine("metamaterial", 3);
+        instantiate_with(&mut sustained, sig, &presence.placement);
+        resonate_with_presence(&mut sustained, sig, &presence, 100);
+
+        let mut abandoned = trial_engine("metamaterial", 3);
+        instantiate_with(&mut abandoned, sig, &presence.placement);
+        abandoned.resonate(100);
+
+        assert_ne!(
+            sustained.field.u, abandoned.field.u,
+            "re-assertion must leave a different field than abandonment"
+        );
+    }
+
+    /// Chunked evolution with zero re-assertions must be identical to
+    /// one continuous run — otherwise the with/without comparison in a
+    /// presence trial measures the chunking, not the structure.
+    #[test]
+    fn chunked_resonate_matches_continuous_when_nothing_is_asserted() {
+        let sig: Vec<f64> = vec![0.0; 256];
+        let presence = Presence {
+            placement: Instantiation::default(),
+            reassert_every: 7,
+            reassert_gain: 1.0,
+        };
+        let mut chunked = trial_engine("metamaterial", 9);
+        resonate_with_presence(&mut chunked, &sig, &presence, 100);
+        let mut continuous = trial_engine("metamaterial", 9);
+        continuous.resonate(100);
+        assert_eq!(
+            chunked.field.u, continuous.field.u,
+            "an all-zero signature re-asserted is a no-op; fields must match"
+        );
+    }
+
+    #[test]
+    fn v3_records_presence_and_control() {
+        let (mut registry, id) = seeded_registry();
+        let record = test_capability_v3(&mut registry, &id, NOISE_SHIELDING, 2, 2, |_| {}).unwrap();
+        assert_eq!(record.contract_version, CONTRACT_VERSION_V3);
+        assert!(record.reassert_every.is_some(), "interval must be recorded");
+        assert!(record.reassert_gain.is_some(), "strength must be recorded");
+        assert!(record.control_advantage.is_some(), "control must run");
+        assert!(record.fit_advantage.is_some());
+        if record.passed {
+            assert!(record.mean_advantage > record.control_advantage.unwrap());
+        }
+    }
+
+    #[test]
+    fn v3_rejects_an_empty_seed_split() {
+        let (mut registry, id) = seeded_registry();
+        assert!(test_capability_v3(&mut registry, &id, NOISE_SHIELDING, 0, 2, |_| {}).is_err());
+        assert!(test_capability_v3(&mut registry, &id, NOISE_SHIELDING, 2, 0, |_| {}).is_err());
+    }
+
     /// Measured on CRY-012630, 2026-08-04: a contract that passed on 6
     /// held-out seeds failed on 30, and the primitive kept Level 6
     /// regardless. A ladder that only ratchets upward stops reporting
@@ -757,6 +1077,8 @@ mod tests {
                 instantiation: Some(Instantiation::default()),
                 fit_advantage: Some(0.05),
                 control_advantage: Some(0.0),
+                reassert_every: None,
+                reassert_gain: None,
             });
             apply_behavior_level(prim);
             assert_eq!(prim.evidence_level, 6, "a pass should grant L6");
@@ -794,6 +1116,8 @@ mod tests {
             instantiation: Some(Instantiation::default()),
             fit_advantage: Some(0.02),
             control_advantage: Some(0.01),
+            reassert_every: None,
+            reassert_gain: None,
         });
         apply_behavior_level(prim);
         assert_eq!(prim.evidence_level, 1);
@@ -819,6 +1143,8 @@ mod tests {
                 instantiation: Some(Instantiation::default()),
                 fit_advantage: Some(0.05),
                 control_advantage: Some(0.0),
+                reassert_every: None,
+                reassert_gain: None,
             });
         }
         apply_behavior_level(prim);

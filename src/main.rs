@@ -123,7 +123,9 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         trials: u64,
         /// Behavioral contract version: v1 fixes the instantiation, v2
-        /// searches it on fit seeds and scores on held-out seeds
+        /// searches placement on fit seeds and scores held-out, v3 keeps
+        /// the structure PRESENT during the task (re-asserted on an
+        /// interval) instead of painted once and abandoned
         #[arg(long, default_value = "v1")]
         contract: String,
         /// v2 only: seeds the instantiation search may fit on. Scoring
@@ -337,7 +339,15 @@ fn dispatch(command: Command) -> Result<(), String> {
                         trials,
                         |l| eprintln!("{l}"),
                     )?,
-                    other => return Err(format!("unknown contract: {other} (v1|v2)")),
+                    "v3" => kannaka_crystal::behavior::test_capability_v3(
+                        &mut registry,
+                        &id,
+                        &cap,
+                        fit_seeds,
+                        trials,
+                        |l| eprintln!("{l}"),
+                    )?,
+                    other => return Err(format!("unknown contract: {other} (v1|v2|v3)")),
                 };
                 registry.save().map_err(|e| e.to_string())?;
                 let prim = registry.find(&id).unwrap();
@@ -359,6 +369,10 @@ fn dispatch(command: Command) -> Result<(), String> {
                 );
                 if let Some(p) = record.instantiation {
                     println!("  placement: {}", p.describe());
+                    if let (Some(every), Some(gain)) = (record.reassert_every, record.reassert_gain)
+                    {
+                        println!("  presence: re-assert every {every} steps at {gain:.2}x gain");
+                    }
                     println!(
                         "  in-sample {:+.4} | held-out {:+.4} | scrambled control {:+.4}",
                         record.fit_advantage.unwrap_or(f64::NAN),
