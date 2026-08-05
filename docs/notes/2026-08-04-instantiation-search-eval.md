@@ -174,3 +174,74 @@ interval interacting with the task's write timing, or re-assertion
 fighting the field's own settled modes on some trajectories (the same
 mixing that erases abandoned structures may be what presence disrupts
 when it hurts).
+
+---
+
+# Addendum 2: per-seed mechanism, and v4's informative failure
+
+## The per-seed portrait of unconditional presence
+
+Instrumenting v3 to emit per-seed with/without scores (60 seeds × three
+forced intervals) shows why presence is unreliable:
+
+- **Interval is non-monotonic.** every=10 is net NEGATIVE (−0.0037,
+  23/60 positive); every=25 is the optimum (+0.0157, 40/60); every=50
+  near zero. Re-asserting too often never lets the field integrate the
+  structure.
+- **A stable presence-hostile core exists.** 14 seeds are hurt at all
+  three intervals, ~2.7× what independence predicts.
+- **The headline: presence is a LEVELLER.** corr(advantage,
+  without-score) = −0.566 at the optimal interval, and the regression
+  slope of with-score on without-score is **0.49** — far from any
+  metric ceiling (range 0.28–0.50). Trials are deterministic per seed,
+  so this is not a sampling artifact. Sustained presence compresses
+  every trajectory toward the structure's own level (~0.38): it lifts
+  the strugglers and drags down the successes.
+
+## v4: the responsive gate, and why it failed
+
+The mechanism suggested an obvious fix — re-assert only while the task's
+probe reads below a threshold ("act where recall is poor"). Implemented
+as behavior-contract-v4: a six-candidate ladder of gated and ungated
+presence, gates bracketing the observed help/hurt boundary, held-out
+scoring moved to seeds 68–127 because the thresholds were derived from
+seeds 8–67.
+
+The gate LOST the fit-seed selection to unconditional presence on both
+capabilities — by 3–6×, not marginally (pattern completion: +0.0240
+ungated vs +0.0072 best-gated). Suppressing re-assertion whenever
+current recall looks adequate reverts those stretches to abandonment,
+which v2 established does nothing.
+
+The deeper reason is worth stating precisely. The moderator of harm in
+the per-seed data is the WITHOUT-structure final score — how the
+trajectory would have fared alone. The gate can only read the
+WITH-structure current state. Those are different variables, and the
+first is a counterfactual: **whether your presence is hurting someone
+who would have succeeded without you is exactly the thing you cannot
+observe from inside the interaction.** Monitoring the trajectory you
+are part of does not reveal the trajectory you displaced.
+
+## Fresh-seed reality check
+
+Seeds 68–127 are a harder window: unconditional presence reads +0.0035
+(53% positive) for pattern completion and +0.0088 (52%) for shielding
+there, versus +0.0157 (67%) on seeds 8–67. Consistent with the 120-seed
+estimate sitting between the two windows. The presence effect remains
+real in aggregate and dependent on seed regime — nothing here crosses,
+and the records say FAILED.
+
+## Where the ladder stands after three contracts
+
+- v2: better placement of an abandoned structure — refuted.
+- v3: sustained presence — real, replicable, small, unreliable
+  per-instance; mechanism identified (leveller).
+- v4: state-gated presence — refuted, for a reason that is itself a
+  finding: the gate's required input is counterfactual.
+
+The surviving lever: the presence-hostile core is STABLE across
+intervals — those 14 seeds are identifiable in advance from trajectory
+properties, not from mid-task state. A contract that selects WHERE to
+be present per-trajectory (offline, from observable initial conditions)
+rather than WHEN (online, from mid-task state) is the remaining
+untested branch.

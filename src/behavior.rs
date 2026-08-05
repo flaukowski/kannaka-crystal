@@ -32,6 +32,7 @@ pub const PATTERN_COMPLETION: &str = "pattern_completion";
 pub const CONTRACT_VERSION: &str = "behavior-contract-v1";
 pub const CONTRACT_VERSION_V2: &str = "behavior-contract-v2";
 pub const CONTRACT_VERSION_V3: &str = "behavior-contract-v3";
+pub const CONTRACT_VERSION_V4: &str = "behavior-contract-v4";
 
 const ADVANTAGE_THRESHOLD: f64 = 0.01;
 const POSITIVE_TRIAL_FLOOR: f64 = 0.7;
@@ -182,10 +183,28 @@ pub struct Presence {
     pub reassert_every: u64,
     /// Fraction of `placement.gain` injected at each re-assertion.
     pub reassert_gain: f64,
+    /// v4 responsive gate: re-assert only while the task target's probe
+    /// reads BELOW this. `None` = unconditional (v3 behaviour).
+    ///
+    /// Motivated by the per-seed finding that unconditional presence is
+    /// a leveller — the regression slope of with-score on without-score
+    /// is ~0.49, so it lifts struggling trajectories and drags down ones
+    /// already succeeding. A structure that acts only where recall is
+    /// poor should keep the lift and lose the drag.
+    pub reassert_below: Option<f64>,
 }
 
-/// Evolve `steps` with the structure re-asserted throughout.
-fn resonate_with_presence(engine: &mut CrystalEngine, signature: &[f64], p: &Presence, steps: u64) {
+/// Evolve `steps` with the structure re-asserted throughout. When the
+/// presence carries a responsive gate, `probe_target` is read (a pure
+/// readout — correlate/energy write nothing) before each re-assertion
+/// and the structure stays quiet while recall is at or above the gate.
+fn resonate_with_presence(
+    engine: &mut CrystalEngine,
+    signature: &[f64],
+    p: &Presence,
+    steps: u64,
+    probe_target: &str,
+) {
     let sustained = Instantiation {
         gain: p.placement.gain * p.reassert_gain,
         ..p.placement
@@ -196,7 +215,13 @@ fn resonate_with_presence(engine: &mut CrystalEngine, signature: &[f64], p: &Pre
         engine.resonate(chunk);
         done += chunk;
         if done < steps {
-            instantiate_with(engine, signature, &sustained);
+            let assert_now = match p.reassert_below {
+                None => true,
+                Some(gate) => engine.probe(probe_target).physical_resonance < gate,
+            };
+            if assert_now {
+                instantiate_with(engine, signature, &sustained);
+            }
         }
     }
 }
@@ -207,6 +232,19 @@ fn noise_shielding_trial_present(
     seed: u64,
     p: &Presence,
 ) -> f64 {
+    noise_shielding_trial_present_detailed(signature, material_id, seed, p).0
+}
+
+/// Returns (advantage, with-structure score, without-structure score).
+/// The raw pair is what per-seed analysis needs: a hurt seed with a HIGH
+/// without-score is interference with an already-working trajectory; a
+/// hurt seed with a LOW without-score is failure to help a hard one.
+fn noise_shielding_trial_present_detailed(
+    signature: &[f64],
+    material_id: &str,
+    seed: u64,
+    p: &Presence,
+) -> (f64, f64, f64) {
     let run = |with_structure: bool| {
         let mut engine = trial_engine(material_id, seed);
         if with_structure {
@@ -215,13 +253,14 @@ fn noise_shielding_trial_present(
         engine.write(&target_text(seed), 1.0);
         engine.noise_amp = 0.01;
         if with_structure {
-            resonate_with_presence(&mut engine, signature, p, 200);
+            resonate_with_presence(&mut engine, signature, p, 200, &target_text(seed));
         } else {
             engine.resonate(200);
         }
         engine.probe(&target_text(seed)).physical_resonance
     };
-    run(true) - run(false)
+    let (w, wo) = (run(true), run(false));
+    (w - wo, w, wo)
 }
 
 fn pattern_completion_trial_present(
@@ -230,6 +269,16 @@ fn pattern_completion_trial_present(
     seed: u64,
     p: &Presence,
 ) -> f64 {
+    pattern_completion_trial_present_detailed(signature, material_id, seed, p).0
+}
+
+/// Returns (advantage, with-structure score, without-structure score).
+fn pattern_completion_trial_present_detailed(
+    signature: &[f64],
+    material_id: &str,
+    seed: u64,
+    p: &Presence,
+) -> (f64, f64, f64) {
     let run = |with_structure: bool| {
         let mut engine = trial_engine(material_id, seed);
         if with_structure {
@@ -244,16 +293,28 @@ fn pattern_completion_trial_present(
             }
         }
         if with_structure {
-            resonate_with_presence(&mut engine, signature, p, 150);
+            resonate_with_presence(&mut engine, signature, p, 150, &target_text(seed));
         } else {
             engine.resonate(150);
         }
         engine.probe(&target_text(seed)).physical_resonance
     };
-    run(true) - run(false)
+    let (w, wo) = (run(true), run(false));
+    (w - wo, w, wo)
 }
 
 type PresentTrialFn = fn(&[f64], &str, u64, &Presence) -> f64;
+type PresentTrialDetailedFn = fn(&[f64], &str, u64, &Presence) -> (f64, f64, f64);
+
+fn present_trial_detailed_fn(capability: &str) -> Result<PresentTrialDetailedFn, String> {
+    match capability {
+        NOISE_SHIELDING => Ok(noise_shielding_trial_present_detailed),
+        PATTERN_COMPLETION => Ok(pattern_completion_trial_present_detailed),
+        other => Err(format!(
+            "unknown capability: {other} ({NOISE_SHIELDING}|{PATTERN_COMPLETION})"
+        )),
+    }
+}
 
 fn present_trial_fn(capability: &str) -> Result<PresentTrialFn, String> {
     match capability {
@@ -298,10 +359,34 @@ fn presence_candidates() -> Vec<Presence> {
                 placement: Instantiation::default(),
                 reassert_every: every,
                 reassert_gain: gain,
+                reassert_below: None,
             });
         }
     }
     out
+}
+
+/// The v4 ladder: six candidates spanning gated and ungated presence.
+/// Gate values 0.35/0.40 bracket the observed help/hurt boundary from
+/// the per-seed analysis (helped seeds sat below ~0.35 without the
+/// structure, hurt seeds above ~0.37); interval 10 is included because
+/// unconditionally it was net-negative — frequent checking that acts
+/// only when needed is exactly the regime a gate could rescue.
+fn presence_candidates_v4() -> Vec<Presence> {
+    let mk = |every: u64, below: Option<f64>| Presence {
+        placement: Instantiation::default(),
+        reassert_every: every,
+        reassert_gain: 1.0,
+        reassert_below: below,
+    };
+    vec![
+        mk(25, None),
+        mk(25, Some(0.35)),
+        mk(25, Some(0.40)),
+        mk(10, Some(0.35)),
+        mk(10, Some(0.40)),
+        mk(50, Some(0.40)),
+    ]
 }
 
 type PlacedTrialFn = fn(&[f64], &str, u64, &Instantiation) -> f64;
@@ -515,6 +600,7 @@ pub fn test_capability(
         control_advantage: None,
         reassert_every: None,
         reassert_gain: None,
+        reassert_below: None,
     };
 
     let stored = registry.find_mut(id).ok_or("primitive vanished mid-test")?;
@@ -615,6 +701,7 @@ pub fn test_capability_v2(
         control_advantage: Some(control),
         reassert_every: None,
         reassert_gain: None,
+        reassert_below: None,
     };
 
     let stored = registry.find_mut(id).ok_or("primitive vanished mid-test")?;
@@ -642,46 +729,171 @@ pub fn test_capability_v3(
     capability: &str,
     fit_seeds: u64,
     held_out_seeds: u64,
+    progress: impl FnMut(String),
+) -> Result<BehavioralCapability, String> {
+    test_capability_v3_inner(
+        registry,
+        id,
+        capability,
+        fit_seeds,
+        held_out_seeds,
+        None,
+        presence_candidates(),
+        CONTRACT_VERSION_V3,
+        None,
+        progress,
+    )
+}
+
+/// Run the v4 contract: RESPONSIVE presence. Same shape as v3, but the
+/// candidate ladder includes gated variants that probe the task target
+/// each interval and re-assert only while recall reads below the gate.
+/// The held-out start should clear any seeds used to derive the gate
+/// thresholds (68 and up for the CRY-012705 analysis).
+pub fn test_capability_v4(
+    registry: &mut Registry,
+    id: &str,
+    capability: &str,
+    fit_seeds: u64,
+    held_out_seeds: u64,
+    held_out_start: Option<u64>,
+    progress: impl FnMut(String),
+) -> Result<BehavioralCapability, String> {
+    test_capability_v3_inner(
+        registry,
+        id,
+        capability,
+        fit_seeds,
+        held_out_seeds,
+        None,
+        presence_candidates_v4(),
+        CONTRACT_VERSION_V4,
+        held_out_start,
+        progress,
+    )
+}
+
+/// Like `test_capability_v3` but with the presence (interval, strength)
+/// FORCED instead of selected — the per-seed research path. Selection is
+/// skipped for both the structure and the scramble, so the comparison
+/// stays symmetric; the fit seeds are still burned (held-out indices are
+/// unchanged) so numbers stay comparable with selected runs.
+#[allow(clippy::too_many_arguments)]
+pub fn test_capability_v3_forced(
+    registry: &mut Registry,
+    id: &str,
+    capability: &str,
+    fit_seeds: u64,
+    held_out_seeds: u64,
+    every: u64,
+    gain: f64,
+    progress: impl FnMut(String),
+) -> Result<BehavioralCapability, String> {
+    if every == 0 {
+        return Err("--force-every must be at least 1".into());
+    }
+    test_capability_v3_inner(
+        registry,
+        id,
+        capability,
+        fit_seeds,
+        held_out_seeds,
+        Some(Presence {
+            placement: Instantiation::default(),
+            reassert_every: every,
+            reassert_gain: gain,
+            reassert_below: None,
+        }),
+        presence_candidates(),
+        CONTRACT_VERSION_V3,
+        None,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn test_capability_v3_inner(
+    registry: &mut Registry,
+    id: &str,
+    capability: &str,
+    fit_seeds: u64,
+    held_out_seeds: u64,
+    forced: Option<Presence>,
+    candidates: Vec<Presence>,
+    version: &str,
+    held_out_start: Option<u64>,
     mut progress: impl FnMut(String),
 ) -> Result<BehavioralCapability, String> {
     if fit_seeds == 0 || held_out_seeds == 0 {
         return Err("v3 needs at least one fit seed and one held-out seed".into());
+    }
+    // Held-out normally starts right after the fit seeds; a later start
+    // lets an eval score on seeds untouched by prior analysis (the gate
+    // thresholds in the v4 ladder came from per-seed data on seeds
+    // 8..68, so v4 evals should score from 68 up).
+    let held_start = held_out_start.unwrap_or(fit_seeds);
+    if held_start < fit_seeds {
+        return Err("held-out start must not overlap the fit seeds".into());
     }
     let prim = registry
         .find(id)
         .ok_or_else(|| format!("unknown primitive: {id}"))?
         .clone();
     let trial = present_trial_fn(capability)?;
+    let trial_detailed = present_trial_detailed_fn(capability)?;
     let fit: Vec<u64> = (0..fit_seeds).collect();
-    let held: Vec<u64> = (fit_seeds..fit_seeds + held_out_seeds).collect();
+    let held: Vec<u64> = (held_start..held_start + held_out_seeds).collect();
 
+    let describe = |c: &Presence| match c.reassert_below {
+        Some(g) => format!(
+            "every={} gain={:.2} below={g:.2}",
+            c.reassert_every, c.reassert_gain
+        ),
+        None => format!(
+            "every={} gain={:.2} always",
+            c.reassert_every, c.reassert_gain
+        ),
+    };
     let select = |signature: &[f64], log: &mut dyn FnMut(String)| -> (Presence, f64) {
-        let mut best = presence_candidates()[0];
+        let mut best = candidates[0];
         let mut best_score = f64::NEG_INFINITY;
-        for cand in presence_candidates() {
-            let score = mean_present_advantage(trial, signature, &prim.material_id, &fit, &cand);
-            log(format!(
-                "  fit every={} gain={:.2}: {score:+.4}",
-                cand.reassert_every, cand.reassert_gain
-            ));
+        for cand in &candidates {
+            let score = mean_present_advantage(trial, signature, &prim.material_id, &fit, cand);
+            log(format!("  fit {}: {score:+.4}", describe(cand)));
             if score > best_score {
                 best_score = score;
-                best = cand;
+                best = *cand;
             }
         }
         (best, best_score)
     };
 
-    progress(format!("selecting presence on {} fit seeds", fit.len()));
-    let (presence, fit_score) = select(&prim.signature, &mut progress);
-    progress(format!(
-        "  selected every={} gain={:.2} (in-sample {fit_score:+.4})",
-        presence.reassert_every, presence.reassert_gain
-    ));
+    let (presence, fit_score) = match forced {
+        Some(f) => {
+            let score = mean_present_advantage(trial, &prim.signature, &prim.material_id, &fit, &f);
+            progress(format!(
+                "forced presence {} (in-sample {score:+.4})",
+                describe(&f)
+            ));
+            (f, score)
+        }
+        None => {
+            progress(format!("selecting presence on {} fit seeds", fit.len()));
+            let (p, score) = select(&prim.signature, &mut progress);
+            progress(format!(
+                "  selected {} (in-sample {score:+.4})",
+                describe(&p)
+            ));
+            (p, score)
+        }
+    };
 
     let mut advantages = Vec::new();
     for seed in &held {
-        let adv = trial(&prim.signature, &prim.material_id, *seed, &presence);
+        let (adv, w, wo) = trial_detailed(&prim.signature, &prim.material_id, *seed, &presence);
+        progress(format!(
+            "  held-out {seed}: {adv:+.4} (with {w:.4} | without {wo:.4})"
+        ));
         advantages.push(adv);
     }
     let n = advantages.len() as f64;
@@ -694,9 +906,12 @@ pub fn test_capability_v3(
         positive * 100.0
     ));
 
-    progress("control: same selection on a scrambled signature".into());
+    progress("control: scrambled signature under the same regime".into());
     let scrambled = scramble(&prim.signature);
-    let (ctrl_presence, _) = select(&scrambled, &mut |_| {});
+    let (ctrl_presence, _) = match forced {
+        Some(f) => (f, 0.0),
+        None => select(&scrambled, &mut |_| {}),
+    };
     let control =
         mean_present_advantage(trial, &scrambled, &prim.material_id, &held, &ctrl_presence);
     progress(format!("  control held-out {control:+.4}"));
@@ -705,7 +920,7 @@ pub fn test_capability_v3(
 
     let record = BehavioralCapability {
         name: capability.to_string(),
-        contract_version: CONTRACT_VERSION_V3.into(),
+        contract_version: version.into(),
         passed,
         mean_advantage: mean,
         std_advantage: std,
@@ -718,6 +933,7 @@ pub fn test_capability_v3(
         control_advantage: Some(control),
         reassert_every: Some(presence.reassert_every),
         reassert_gain: Some(presence.reassert_gain),
+        reassert_below: presence.reassert_below,
     };
 
     let stored = registry.find_mut(id).ok_or("primitive vanished mid-test")?;
@@ -989,10 +1205,11 @@ mod tests {
             placement: Instantiation::default(),
             reassert_every: 10,
             reassert_gain: 0.5,
+            reassert_below: None,
         };
         let mut sustained = trial_engine("metamaterial", 3);
         instantiate_with(&mut sustained, sig, &presence.placement);
-        resonate_with_presence(&mut sustained, sig, &presence, 100);
+        resonate_with_presence(&mut sustained, sig, &presence, 100, "presence test");
 
         let mut abandoned = trial_engine("metamaterial", 3);
         instantiate_with(&mut abandoned, sig, &presence.placement);
@@ -1014,9 +1231,10 @@ mod tests {
             placement: Instantiation::default(),
             reassert_every: 7,
             reassert_gain: 1.0,
+            reassert_below: None,
         };
         let mut chunked = trial_engine("metamaterial", 9);
-        resonate_with_presence(&mut chunked, &sig, &presence, 100);
+        resonate_with_presence(&mut chunked, &sig, &presence, 100, "presence test");
         let mut continuous = trial_engine("metamaterial", 9);
         continuous.resonate(100);
         assert_eq!(
@@ -1044,6 +1262,73 @@ mod tests {
         let (mut registry, id) = seeded_registry();
         assert!(test_capability_v3(&mut registry, &id, NOISE_SHIELDING, 0, 2, |_| {}).is_err());
         assert!(test_capability_v3(&mut registry, &id, NOISE_SHIELDING, 2, 0, |_| {}).is_err());
+    }
+
+    /// The gate must change behaviour: with a threshold the structure
+    /// stays quiet on chunks where recall is already good, so a gated
+    /// field diverges from an ungated one over the same trajectory.
+    #[test]
+    fn gated_presence_differs_from_unconditional() {
+        let (registry, id) = seeded_registry();
+        let sig = &registry.find(&id).unwrap().signature;
+        let base = Presence {
+            placement: Instantiation::default(),
+            reassert_every: 10,
+            reassert_gain: 1.0,
+            reassert_below: None,
+        };
+        // A gate no trajectory can be below: never re-asserts.
+        let gated = Presence {
+            reassert_below: Some(-1.0),
+            ..base
+        };
+        let mut always = trial_engine("metamaterial", 4);
+        instantiate_with(&mut always, sig, &base.placement);
+        resonate_with_presence(&mut always, sig, &base, 100, "gate test target");
+
+        let mut never = trial_engine("metamaterial", 4);
+        instantiate_with(&mut never, sig, &gated.placement);
+        resonate_with_presence(&mut never, sig, &gated, 100, "gate test target");
+
+        assert_ne!(
+            always.field.u, never.field.u,
+            "an impossible gate must suppress every re-assertion"
+        );
+
+        // And the never-fires path must equal plain evolution from the
+        // same start — which also proves the mid-loop probe reads are
+        // not mutating the field.
+        let mut plain = trial_engine("metamaterial", 4);
+        instantiate_with(&mut plain, sig, &gated.placement);
+        plain.resonate(100);
+        assert_eq!(
+            never.field.u, plain.field.u,
+            "gated-out presence must be byte-identical to absence of re-assertion"
+        );
+    }
+
+    #[test]
+    fn v4_records_the_gate_and_respects_held_out_start() {
+        let (mut registry, id) = seeded_registry();
+        let record =
+            test_capability_v4(&mut registry, &id, NOISE_SHIELDING, 2, 2, Some(10), |_| {})
+                .unwrap();
+        assert_eq!(record.contract_version, CONTRACT_VERSION_V4);
+        assert!(record.reassert_every.is_some());
+        // The selected candidate may be gated or ungated; either way the
+        // field must round-trip through the record.
+        let prim = registry.find(&id).unwrap();
+        let stored = prim
+            .behavioral_capabilities
+            .iter()
+            .find(|c| c.name == NOISE_SHIELDING)
+            .unwrap();
+        assert_eq!(stored.reassert_below, record.reassert_below);
+        // Overlapping start must be rejected.
+        assert!(
+            test_capability_v4(&mut registry, &id, NOISE_SHIELDING, 4, 2, Some(2), |_| {}).is_err(),
+            "held-out start inside the fit range must error"
+        );
     }
 
     /// Measured on CRY-012630, 2026-08-04: a contract that passed on 6
@@ -1079,6 +1364,7 @@ mod tests {
                 control_advantage: Some(0.0),
                 reassert_every: None,
                 reassert_gain: None,
+                reassert_below: None,
             });
             apply_behavior_level(prim);
             assert_eq!(prim.evidence_level, 6, "a pass should grant L6");
@@ -1118,6 +1404,7 @@ mod tests {
             control_advantage: Some(0.01),
             reassert_every: None,
             reassert_gain: None,
+            reassert_below: None,
         });
         apply_behavior_level(prim);
         assert_eq!(prim.evidence_level, 1);
@@ -1145,6 +1432,7 @@ mod tests {
                 control_advantage: Some(0.0),
                 reassert_every: None,
                 reassert_gain: None,
+                reassert_below: None,
             });
         }
         apply_behavior_level(prim);
