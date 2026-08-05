@@ -126,6 +126,11 @@ pub struct BehavioralCapability {
     /// v3: fraction of the placement gain injected per re-assertion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reassert_gain: Option<f64>,
+    /// v4: responsive gate — re-assertion happened only while the task's
+    /// probe read BELOW this. Absent = unconditional presence (v3) or no
+    /// presence at all (v1/v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reassert_below: Option<f64>,
 }
 
 /// Where a structure is placed into a task field, how large, how strong,

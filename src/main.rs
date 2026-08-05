@@ -132,6 +132,19 @@ enum Command {
         /// uses --trials further seeds the search never sees.
         #[arg(long, default_value_t = 4)]
         fit_seeds: u64,
+        /// v3 research: FORCE the presence interval (skips selection;
+        /// requires --force-gain). Held-out indices unchanged, so
+        /// numbers stay comparable with selected runs.
+        #[arg(long)]
+        force_every: Option<u64>,
+        /// v3 research: FORCE the presence gain fraction
+        #[arg(long)]
+        force_gain: Option<f64>,
+        /// v4: first held-out seed index (default = right after fit
+        /// seeds). Use 68+ so scoring clears the seeds the gate
+        /// thresholds were derived from.
+        #[arg(long)]
+        held_out_start: Option<u64>,
         /// Seeds for the perturbation ensemble (§8 standard: 8)
         #[arg(long, default_value_t = 8)]
         seeds: u64,
@@ -316,6 +329,9 @@ fn dispatch(command: Command) -> Result<(), String> {
             trials,
             contract,
             fit_seeds,
+            force_every,
+            force_gain,
+            held_out_start,
         } => {
             let mut registry = Registry::load().map_err(|e| e.to_string())?;
             if procedure == "behavior" {
@@ -339,15 +355,43 @@ fn dispatch(command: Command) -> Result<(), String> {
                         trials,
                         |l| eprintln!("{l}"),
                     )?,
-                    "v3" => kannaka_crystal::behavior::test_capability_v3(
+                    "v3" => match (force_every, force_gain) {
+                        (Some(every), Some(gain)) => {
+                            kannaka_crystal::behavior::test_capability_v3_forced(
+                                &mut registry,
+                                &id,
+                                &cap,
+                                fit_seeds,
+                                trials,
+                                every,
+                                gain,
+                                |l| eprintln!("{l}"),
+                            )?
+                        }
+                        (None, None) => kannaka_crystal::behavior::test_capability_v3(
+                            &mut registry,
+                            &id,
+                            &cap,
+                            fit_seeds,
+                            trials,
+                            |l| eprintln!("{l}"),
+                        )?,
+                        _ => {
+                            return Err(
+                                "--force-every and --force-gain must be given together".into()
+                            )
+                        }
+                    },
+                    "v4" => kannaka_crystal::behavior::test_capability_v4(
                         &mut registry,
                         &id,
                         &cap,
                         fit_seeds,
                         trials,
+                        held_out_start,
                         |l| eprintln!("{l}"),
                     )?,
-                    other => return Err(format!("unknown contract: {other} (v1|v2|v3)")),
+                    other => return Err(format!("unknown contract: {other} (v1|v2|v3|v4)")),
                 };
                 registry.save().map_err(|e| e.to_string())?;
                 let prim = registry.find(&id).unwrap();
@@ -371,7 +415,14 @@ fn dispatch(command: Command) -> Result<(), String> {
                     println!("  placement: {}", p.describe());
                     if let (Some(every), Some(gain)) = (record.reassert_every, record.reassert_gain)
                     {
-                        println!("  presence: re-assert every {every} steps at {gain:.2}x gain");
+                        match record.reassert_below {
+                            Some(g) => println!(
+                                "  presence: every {every} steps at {gain:.2}x gain, only while probe < {g:.2}"
+                            ),
+                            None => println!(
+                                "  presence: re-assert every {every} steps at {gain:.2}x gain"
+                            ),
+                        }
                     }
                     println!(
                         "  in-sample {:+.4} | held-out {:+.4} | scrambled control {:+.4}",
