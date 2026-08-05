@@ -114,3 +114,63 @@ structure is furniture, not a participant. A contract where the structure
 is re-asserted during evolution, or coupled to the task rather than
 merely present in it, tests a different claim than either version has
 tested so far.
+
+---
+
+# Addendum, same day: behavior-contract-v3 — presence instead of placement
+
+The contract-side follow-up proposed above was built and measured within
+the day. v3 keeps the structure present — re-asserted every N steps at a
+fraction of its gain while the task runs — instead of painted once into
+a field that then evolves without it. Selection is over nine
+(interval, strength) combinations at the default placement; same
+fit/held-out split; the scramble receives the identical sustained
+injection.
+
+## The first number all day that did not evaporate
+
+CRY-012705, presence every 25 steps at 1.0× gain:
+
+| capability | 30 held-out | 120 held-out | control @120 | positive @120 |
+|---|---|---|---|---|
+| noise_shielding | +0.0142 ± 0.0414 | **+0.0125 ± 0.0424** | +0.0090 | 60% |
+| pattern_completion | +0.0113 ± 0.0462 | **+0.0096 ± 0.0484** | +0.0039 | 60% |
+
+Every v2 result collapsed toward zero under a seed increase
+(+0.0159→+0.0016; +0.0098→+0.0015). These held: at 120 seeds the
+noise-shielding mean is 3.2 standard errors from zero. Sustained
+presence produces a real, replicable positive effect. The mechanism
+direction — participant, not furniture — is supported.
+
+## Why it still fails, and should
+
+Both runs record FAILED, correctly, for two reasons that are findings in
+their own right:
+
+1. **60% positive < the 70% floor.** Presence helps on most seeds and
+   actively hurts on a large minority. The effect is real on average and
+   unreliable per-instance — which for a capability claim is a fail; a
+   shield that fails four seeds in ten is not yet a shield.
+
+2. **On noise_shielding, most of the effect is wattage.** The scrambled
+   control reads +0.0090 and +0.0094 across independent runs — sustained
+   injection of ANY pattern nearly clears the bar on that task. The
+   arrangement's own contribution is ~+0.0035. Pattern completion is
+   more encouraging: its control sits at +0.0039–0.0042, so arrangement
+   carries ~60% of a near-bar effect there.
+
+The demotion rule shipped this morning fired twice, live: the 30-seed
+pass granted L6, and the 120-seed re-test took it back. Final state
+L4 — exactly what the primitive's non-behavioral evidence supports.
+
+## Where this leaves the ladder
+
+Not a crossing. The claim "presence confers capability" survives at the
+population level and fails at the instance level, and the next lever is
+visible in the two controls: pattern_completion is the task where
+arrangement does the work, so per-seed reliability there — why those
+40% of seeds get hurt — is the specific question. Candidates: presence
+interval interacting with the task's write timing, or re-assertion
+fighting the field's own settled modes on some trajectories (the same
+mixing that erases abandoned structures may be what presence disrupts
+when it hurts).
